@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.superpowers/
+*.tmp
+
+# Secrets — never commit actual config
+digest/config.yaml
+!digest/config.yaml.example
+
+# Standard patterns (defensive)
+.env
+.env.*
+!.env.example
+*.log

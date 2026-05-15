@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ subject }}</title>
+  <style>
+    /* Reset + base */
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      color: #1e293b;
+    }
+
+    /* Card */
+    .card {
+      max-width: 660px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+
+    /* Header */
+    .header {
+      background: #1e293b;
+      color: #f8fafc;
+      padding: 22px 28px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: .01em;
+    }
+    .header-range {
+      margin: 6px 0 0;
+      font-size: 12px;
+      color: #94a3b8;
+      letter-spacing: .01em;
+    }
+
+    /* Section */
+    .section {
+      padding: 0 28px 20px;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 18px 0 10px;
+      border-bottom: 1px solid #e2e8f0;
+      margin-bottom: 12px;
+    }
+    .section-header .icon {
+      font-size: 18px;
+      line-height: 1;
+    }
+    .section-header h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: #475569;
+    }
+    .section-header .count {
+      margin-left: auto;
+      font-size: 12px;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+
+    /* Item card */
+    .item {
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      background: #f8fafc;
+      border-left: 4px solid #e2e8f0;
+    }
+
+    /* Atlassian accent (jira, confluence) */
+    .item-jira,
+    .item-confluence {
+      border-left-color: #0ea5e9;
+    }
+
+    /* M365 accent (teams, outlook) */
+    .item-teams,
+    .item-outlook {
+      border-left-color: #6366f1;
+    }
+
+    /* Action-needed highlight */
+    .item-action_needed {
+      background: #fff7ed;
+      border-left-color: #f97316;
+    }
+
+    .item-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 5px;
+    }
+    .item-title a {
+      color: #0f172a;
+      text-decoration: none;
+    }
+    .item-title a:hover {
+      text-decoration: underline;
+    }
+    .item-summary {
+      font-size: 13px;
+      color: #475569;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    /* Source chip */
+    .source-chip {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border-radius: 3px;
+      padding: 1px 5px;
+      margin-right: 6px;
+      vertical-align: middle;
+      background: #e2e8f0;
+      color: #64748b;
+    }
+    .chip-jira, .chip-confluence { background: #e0f2fe; color: #0369a1; }
+    .chip-teams, .chip-outlook   { background: #ede9fe; color: #5b21b6; }
+
+    /* Priority badge */
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border-radius: 3px;
+      padding: 1px 6px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .badge-action_needed {
+      background: #fed7aa;
+      color: #c2410c;
+    }
+    .badge-meeting_invite {
+      background: #ddd6fe;
+      color: #5b21b6;
+    }
+
+    /* Infrastructure notices */
+    .notices {
+      padding: 0 28px 4px;
+    }
+    .notice {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      background: #fff7ed;
+      border-left: 4px solid #f97316;
+      border-radius: 4px;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: #9a3412;
+    }
+
+    /* Footer */
+    .footer {
+      padding: 16px 28px;
+      border-top: 1px solid #e2e8f0;
+      text-align: center;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    /* Mobile */
+    @media (max-width: 600px) {
+      .header { padding: 16px 16px; }
+      .section { padding: 0 16px 16px; }
+      .footer { padding: 12px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f1f5f9; padding:24px 0;">
+    <tr>
+      <td align="center">
+        <!--[if mso]><table width="660" cellpadding="0" cellspacing="0" role="presentation"><tr><td><![endif]-->
+        <div class="card">
+
+      <!-- Header -->
+      <div class="header">
+        <h1>{{ subject }}</h1>
+        {% if time_range %}<p class="header-range">{{ time_range }}</p>{% endif %}
+      </div>
+
+      <!-- Infrastructure notices (fetch/LLM errors) -->
+      {% if notices %}
+      <div class="notices">
+        {% for notice in notices %}
+        <div class="notice">⚠️ {{ notice }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <!-- Sections grouped by new vs. updates -->
+      {% for grp in group_order %}
+        {% if sections.get(grp) %}
+        <div class="section">
+          <div class="section-header">
+            <span class="icon">{{ group_icons[grp] }}</span>
+            <h2>{{ group_labels[grp] }}</h2>
+            <span class="count">{{ sections[grp]|length }} item{{ 's' if sections[grp]|length != 1 }}</span>
+          </div>
+
+          {% for item in sections[grp] %}
+          <div class="item item-{{ item.source }}{% if item.priority == 'action_needed' %} item-action_needed{% endif %}">
+            <div class="item-title">
+              <span class="source-chip chip-{{ item.source }}">{{ source_icons[item.source] }} {{ source_labels[item.source] }}</span>
+              <a href="{{ item.url | safe_url }}">{{ item.title }}</a>
+              {% if item.priority == 'action_needed' %}
+                <span class="badge badge-action_needed">Action needed</span>
+              {% elif item.priority == 'meeting_invite' %}
+                <span class="badge badge-meeting_invite">Meeting invite</span>
+              {% endif %}
+            </div>
+            <p class="item-summary">{{ item.summary }}</p>
+          </div>
+          {% endfor %}
+
+        </div>
+        {% endif %}
+      {% endfor %}
+
+      <!-- Footer -->
+      <div class="footer">
+        AI-generated summary &middot; all headings link to originals
+      </div>
+
+        </div>
+        <!--[if mso]></td></tr></table><![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

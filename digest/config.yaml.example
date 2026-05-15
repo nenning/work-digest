@@ -1,0 +1,40 @@
+atlassian:
+  url: https://yourcompany.atlassian.net
+  email: you@company.com
+  api_token: "your-api-token"   # create at id.atlassian.com/manage-profile/security/api-tokens
+  jira_projects: [PROJ, OTHER]
+  # jira_jql_extra: '"Team[Team]" = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+  # optional — added by AND to all 3 Jira queries (before ORDER BY)
+  confluence_spaces: [ENG, DOC]
+
+m365:
+  enabled: true    # set to false to skip Teams/Outlook and open a local Outlook draft instead
+
+  # tenant_id is optional — omit to use "organizations" authority
+  # tenant_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+  # client_id: required if your tenant blocks the Azure CLI app ID (AADSTS65002 error).
+  # Register your own Azure AD app (Public client, delegated permissions:
+  # Mail.Read, Mail.Send, Chat.Read, ChannelMessage.Read.All, User.Read)
+  # and paste its Application (client) ID here.
+  # client_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+llm:
+  provider: openai              # openai | anthropic | azure_openai
+  api_key: "sk-..."
+  model: gpt-4o                  # comma-separated for multiple: "gpt-4o, gpt-4o-mini"
+  endpoint: "https://..."        # optional — overrides provider default
+  fallback_model: gpt-4o-mini    # optional — comma-separated list, tried in order after all primary models fail
+  # llm_workers: 4              # optional — parallel LLM calls during summarization (default: 4)
+  # llm_timeout: 30             # optional — seconds before a single LLM call is cancelled and the next model tried (default: 30)
+
+schedule:
+  times: ["08:00", "13:00"]
+
+email:
+  subject_prefix: "[Digest]"
+  recipient: you@company.com   # required when m365.enabled is false (COM send path)
+
+language: de   # ISO 639-1 output language for LLM summaries (de | en | fr | es | it | ...)
+
+data_dir: ~/.digest

@@ -1,0 +1,10 @@
+msal>=1.28
+requests>=2.31
+openai>=1.30
+anthropic>=0.28
+pyyaml>=6.0
+jinja2>=3.1
+pytest>=8.0
+pytest-mock>=3.14
+# Windows only — required for open_local_draft() when m365.enabled: false
+pywin32>=306; sys_platform == "win32"

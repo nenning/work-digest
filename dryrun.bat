@@ -1,0 +1,1 @@
+python .\digest\main.py --dry-run --since 24h
