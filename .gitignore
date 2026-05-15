@@ -5,6 +5,9 @@ __pycache__/
 .superpowers/
 *.tmp
 
+# Claude Code local settings (user-specific)
+.claude/settings.local.json
+
 # Secrets — never commit actual config
 digest/config.yaml
 !digest/config.yaml.example
