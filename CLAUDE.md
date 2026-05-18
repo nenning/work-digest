@@ -50,7 +50,11 @@ digest/auth/
   atlassian.py          Basic Auth header for Jira/Confluence
   microsoft.py          MSAL device code flow; token cache at ~/.digest/token_cache.bin
 digest/sources/
-  jira.py               Assigned tickets, comments, new tickets (JQL POST)
+  jira.py               Watched tickets (watcher = currentUser()); per-ticket changelog
+                        via GET /issue/{key}/changelog; detects @mentions in ADF;
+                        per-ticket priority: mentions > comments/desc changes > field changes;
+                        field changes merged to initial→final state (net-zero dropped);
+                        new tickets via separate JQL query
   confluence.py         Mentions + page updates (CQL); deduplicates per page
   teams.py              Channel messages + DMs via Graph API
   outlook.py            Inbox messages via Graph API
@@ -65,7 +69,8 @@ State is only written on a successful send, never on `--dry-run`.
 ## Key design decisions
 
 - **M365 optional:** `m365.enabled: false` skips Teams/Outlook fetching and opens a local Outlook draft via `win32com` COM instead of sending via Graph API.
-- **LLM prompts:** Content < 100 chars is quoted verbatim; longer content gets a 2–4 sentence summary. Confluence cosmetic diffs return `{"summary": null}` (skipped). Jira new tickets are formatted directly without an LLM call.
+- **LLM prompts:** Content < 100 chars is quoted verbatim; longer content gets a 2–4 sentence summary. Confluence cosmetic diffs return `{"summary": null}` (skipped). Jira `new_ticket` and `field_change` items are formatted directly without an LLM call. Jira `mention` items get an action-focused prompt that names who mentioned you and what is expected.
+- **Jira digest sections:** Email groups Jira into four ordered sections: Erwähnungen (mentions) → Kommentare & Beschreibungen → Neue Tickets → Feldänderungen. Confluence appears before all Jira sections.
 - **Fallback model:** If the primary LLM call fails, `summarizer.py` retries with `fallback_model` if configured.
 - **Outlook priority:** Outlook items are classified as `action_needed / meeting_invite / fyi / info` and color-coded in the HTML template.
 - **URL safety:** `email_sender.py` allows only `http`/`https` URLs to prevent `javascript:` injection.

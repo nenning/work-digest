@@ -234,8 +234,7 @@ Each run fetches activity since the last successful run (or 24 hours ago on firs
 
 | Source | What is fetched | API used |
 |--------|----------------|----------|
-| **Jira** | Tickets assigned to you (updated since last run) | Jira REST API v3, JQL search |
-| **Jira** | Comments on tickets you reported or are assigned to | JQL + per-issue comment list |
+| **Jira** | All tickets you are watching (updated since last run): @mentions in comments or descriptions, new comments, field changes (status, assignee, …) | Jira REST API v3, JQL `watcher = currentUser()` + per-issue changelog |
 | **Jira** | Newly created tickets in your configured projects | JQL `created >= since` |
 | **Confluence** | Pages where you are `@mentioned` (created since last run) | Confluence CQL, `/wiki/rest/api/content/search` |
 | **Confluence** | Pages modified in your configured spaces | CQL `lastModified >= since` |
