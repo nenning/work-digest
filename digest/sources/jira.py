@@ -8,7 +8,7 @@ from digest.models import SourceItem
 
 
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
-    since_str = since.strftime("%Y-%m-%d %H:%M")
+    since_str = since.astimezone().strftime("%Y-%m-%d %H:%M")
     current_user = _get_current_user(config, auth_header)
     account_id = current_user.get("accountId", "")
     items: List[SourceItem] = []

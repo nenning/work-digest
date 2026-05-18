@@ -38,7 +38,7 @@ for /f "tokens=*" %%t in (times.tmp) do (
     set TIME=%%t
     set TASKNAME=WorkDigest-!TIME::=-!
     echo Registering !TASKNAME! at %%t...
-    schtasks /create /tn "!TASKNAME!" /tr "\"!PYTHON_EXE!\" \"!SCRIPT_DIR!digest\main.py\"" /sc daily /st %%t /ru "%USERNAME%" /f
+    schtasks /create /tn "!TASKNAME!" /tr "\"!PYTHON_EXE!\" \"!SCRIPT_DIR!digest\main.py\"" /sc weekly /d MON,TUE,WED,THU,FRI /st %%t /ru "%USERNAME%" /f
     if !errorlevel! neq 0 (
         echo   WARNING: Failed to register !TASKNAME!
     ) else (

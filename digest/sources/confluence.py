@@ -18,7 +18,7 @@ _SPACE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]*$")
 
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
     # Confluence CQL requires "YYYY-MM-DD HH:MM" format — the T-separator is not accepted.
-    since_cql = since.strftime("%Y-%m-%d %H:%M")
+    since_cql = since.astimezone().strftime("%Y-%m-%d %H:%M")
     _validate_space_keys(config.confluence_spaces)
     items: List[SourceItem] = []
     user_account_id = _get_account_id(config, auth_header)
