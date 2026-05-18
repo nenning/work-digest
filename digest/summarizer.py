@@ -71,6 +71,18 @@ def _build_prompt(item: SourceItem, language: str = "de") -> str:
             'Respond with JSON only: {"summary": "..."} or {"summary": null}'
         )
 
+    if item.source == "jira" and item.kind == "mention":
+        mention_author = item.metadata.get("mention_author", item.author)
+        return (
+            f"Jira-Erwähnung in Ticket '{item.title}'.\n"
+            f"Erwähnt von: {mention_author}\n"
+            f"Kommentar:\n{content}\n\n"
+            f"Fasse zusammen: wer hat dich erwähnt, was wurde gefragt/gesagt, welche Aktion wird erwartet.\n"
+            f"Sei konkret — der Leser soll ohne Öffnen des Tickets handeln können.\n"
+            f"Antworte auf {lang}. Wiederhole den Ticket-Key nicht.\n"
+            'Antworte nur mit JSON: {"summary": "..."}'
+        )
+
     if len(item.content) < 100:
         content_instruction = "The content is short — quote it verbatim in the summary."
     else:
@@ -235,6 +247,19 @@ def _build_description_prompt(item: SourceItem, language: str = "de") -> str:
     )
 
 
+def _format_field_change(item: SourceItem) -> SummarizedItem:
+    return SummarizedItem(
+        source=item.source,
+        kind=item.kind,
+        title=item.title,
+        url=item.url,
+        summary=item.content,
+        author=item.author,
+        timestamp=item.timestamp,
+        priority=item.priority,
+    )
+
+
 def _format_new_ticket(item: SourceItem, description_summary: str | None = None, language: str = "de") -> SummarizedItem:
     labels = _NEW_TICKET_LABELS.get(language.lower(), _DEFAULT_LABELS)
     new_label = labels.get("new", "Neu")
@@ -357,7 +382,8 @@ def summarize_items(
     logging.getLogger("anthropic").setLevel(logging.WARNING)
 
     ticket_items = [i for i in items if i.source == "jira" and i.kind == "new_ticket"]
-    llm_items = [i for i in items if not (i.source == "jira" and i.kind in ("new_ticket", "assignment"))]
+    field_change_items = [i for i in items if i.source == "jira" and i.kind == "field_change"]
+    llm_items = [i for i in items if not (i.source == "jira" and i.kind in ("new_ticket", "assignment", "field_change"))]
     total = len(ticket_items) + len(llm_items)
 
     if total == 0:
@@ -420,6 +446,9 @@ def summarize_items(
 
     for idx in sorted(ticket_results):
         results.append(ticket_results[idx][0])
+
+    for item in field_change_items:
+        results.append(_format_field_change(item))
 
     for idx in sorted(llm_results):
         summarized, _, _t, _f = llm_results[idx]

@@ -9,11 +9,22 @@ from digest.models import SourceItem
 
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
     since_str = since.strftime("%Y-%m-%d %H:%M")
+    current_user = _get_current_user(config, auth_header)
+    account_id = current_user.get("accountId", "")
     items: List[SourceItem] = []
-    items.extend(_fetch_assigned(config, auth_header, since_str))
-    items.extend(_fetch_comments(config, auth_header, since, since_str))
+    items.extend(_fetch_watched(config, auth_header, since, since_str, account_id))
     items.extend(_fetch_new_tickets(config, auth_header, since_str))
     return items
+
+
+def _get_current_user(config: AtlassianConfig, auth_header: str) -> dict:
+    resp = requests.get(
+        f"{config.url}/rest/api/3/myself",
+        headers={"Authorization": auth_header, "Accept": "application/json"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _append_extra(jql: str, extra: str | None) -> str:
@@ -33,7 +44,6 @@ def _validate_project_keys(keys: list[str]) -> None:
 
 
 def _jql_search(config: AtlassianConfig, auth_header: str, jql: str) -> list:
-    # /rest/api/3/search (GET) was removed — use the POST /search/jql endpoint instead.
     resp = requests.post(
         f"{config.url}/rest/api/3/search/jql",
         headers={
@@ -61,7 +71,25 @@ def _jql_search(config: AtlassianConfig, auth_header: str, jql: str) -> list:
     return issues
 
 
-def _fetch_assigned(config, auth_header, since_str) -> List[SourceItem]:
+def _fetch_issue_changelog(config: AtlassianConfig, auth_header: str, issue_key: str) -> list:
+    """Return changelog history entries for a single issue (up to 100)."""
+    resp = requests.get(
+        f"{config.url}/rest/api/3/issue/{issue_key}/changelog",
+        headers={"Authorization": auth_header, "Accept": "application/json"},
+        params={"maxResults": 100},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("values", [])
+
+
+def _fetch_watched(
+    config: AtlassianConfig,
+    auth_header: str,
+    since: datetime,
+    since_str: str,
+    account_id: str,
+) -> List[SourceItem]:
     if not config.jira_projects:
         return []
     _validate_project_keys(config.jira_projects)
@@ -69,50 +97,165 @@ def _fetch_assigned(config, auth_header, since_str) -> List[SourceItem]:
     issues = _jql_search(
         config, auth_header,
         _append_extra(
-            f'project in ({projects}) AND assignee = currentUser() AND updated >= "{since_str}"',
+            f'project in ({projects}) AND watcher = currentUser() AND updated >= "{since_str}"',
             config.jira_jql_extra,
         ),
     )
-    return [
-        SourceItem(
-            source="jira", kind="assignment",
-            title=f"{i['key']}: {i['fields']['summary']}",
-            url=f"{config.url}/browse/{i['key']}",
-            content=f"Ticket {i['key']}: {i['fields']['summary']}. Status: {i['fields']['status']['name']}.",
-            author=_display_name(i["fields"].get("reporter")),
-            timestamp=_parse_dt(i["fields"]["updated"]),
-        )
-        for i in issues
-    ]
 
+    since_utc = since.astimezone(timezone.utc)
+    items: List[SourceItem] = []
 
-def _fetch_comments(config, auth_header, since: datetime, since_str: str) -> List[SourceItem]:
-    if not config.jira_projects:
-        return []
-    _validate_project_keys(config.jira_projects)
-    projects = ", ".join(config.jira_projects)
-    issues = _jql_search(
-        config, auth_header,
-        _append_extra(
-            f'project in ({projects}) AND updated >= "{since_str}" AND '
-            f'(assignee = currentUser() OR reporter = currentUser())',
-            config.jira_jql_extra,
-        ),
-    )
-    items = []
     for issue in issues:
-        for comment in issue["fields"].get("comment", {}).get("comments", []):
-            if _parse_dt(comment["updated"]) < since.astimezone(timezone.utc):
-                continue
-            items.append(SourceItem(
-                source="jira", kind="comment",
-                title=f"Comment on {issue['key']}: {issue['fields']['summary']}",
-                url=f"{config.url}/browse/{issue['key']}",
-                content=_extract_text(comment.get("body", "")),
-                author=_display_name(comment.get("author")),
-                timestamp=_parse_dt(comment["updated"]),
-            ))
+        key = issue["key"]
+        title = f"{key}: {issue['fields']['summary']}"
+        url = f"{config.url}/browse/{key}"
+        issue["changelog"] = {"histories": _fetch_issue_changelog(config, auth_header, key)}
+        candidates = _collect_candidates(issue, since_utc, account_id, title, url)
+        items.extend(_deduplicate(candidates))
+
     return items
+
+
+def _collect_candidates(
+    issue: dict,
+    since_utc: datetime,
+    account_id: str,
+    title: str,
+    url: str,
+) -> List[SourceItem]:
+    """Collect all candidate SourceItems from comments, description changes, and field changes."""
+    candidates: List[SourceItem] = []
+
+    # comments
+    for comment in issue["fields"].get("comment", {}).get("comments", []):
+        if _parse_dt(comment["updated"]) < since_utc:
+            continue
+        body = comment.get("body", "")
+        author = _display_name(comment.get("author"))
+        ts = _parse_dt(comment["updated"])
+        text = _extract_text(body)
+        if _has_mention(body, account_id):
+            candidates.append(SourceItem(
+                source="jira", kind="mention",
+                title=title, url=url,
+                content=text,
+                author=author,
+                timestamp=ts,
+                metadata={"mention_author": author},
+            ))
+        else:
+            candidates.append(SourceItem(
+                source="jira", kind="comment",
+                title=title, url=url,
+                content=text,
+                author=author,
+                timestamp=ts,
+            ))
+
+    # changelog: description changes and other field changes
+    changelog_histories = issue.get("changelog", {}).get("histories", [])
+    field_changes: list[dict] = []
+    desc_item: SourceItem | None = None
+
+    for history in changelog_histories:
+        if _parse_dt(history["created"]) < since_utc:
+            continue
+        history_author = _display_name(history.get("author"))
+        history_ts = _parse_dt(history["created"])
+
+        for change in history.get("items", []):
+            field = change.get("field", "")
+            if field in ("comment", "Attachment"):
+                continue
+            if field == "description":
+                desc_node = issue["fields"].get("description") or ""
+                if _has_mention(desc_node, account_id):
+                    desc_item = SourceItem(
+                        source="jira", kind="mention",
+                        title=title, url=url,
+                        content=_extract_text(desc_node),
+                        author=history_author,
+                        timestamp=history_ts,
+                        metadata={"mention_author": history_author},
+                    )
+                else:
+                    desc_item = SourceItem(
+                        source="jira", kind="description_change",
+                        title=title, url=url,
+                        content=_extract_text(desc_node),
+                        author=history_author,
+                        timestamp=history_ts,
+                    )
+            else:
+                from_val = change.get("fromString") or "—"
+                to_val = change.get("toString") or "—"
+                field_changes.append({
+                    "field": field,
+                    "from": from_val,
+                    "to": to_val,
+                    "author": history_author,
+                    "ts": history_ts,
+                })
+
+    if desc_item is not None:
+        candidates.append(desc_item)
+
+    if field_changes:
+        net_changes = _merge_field_changes(field_changes)
+        if net_changes:
+            latest_ts = max(c["ts"] for c in net_changes)
+            latest_author = next(c["author"] for c in net_changes if c["ts"] == latest_ts)
+            content = "; ".join(f"{c['field']}: {c['from']} → {c['to']}" for c in net_changes)
+            candidates.append(SourceItem(
+                source="jira", kind="field_change",
+                title=title, url=url,
+                content=content,
+                author=latest_author,
+                timestamp=latest_ts,
+                metadata={"changes": net_changes},
+            ))
+
+    return candidates
+
+
+def _merge_field_changes(changes: list[dict]) -> list[dict]:
+    """Per field: keep initial state (earliest from) and final state (latest to). Drop no-ops."""
+    by_field: dict[str, list[dict]] = {}
+    for c in changes:
+        by_field.setdefault(c["field"], []).append(c)
+
+    result = []
+    for entries in by_field.values():
+        entries.sort(key=lambda x: x["ts"])
+        first_from = entries[0]["from"]
+        last = entries[-1]
+        if first_from != last["to"]:
+            result.append({**last, "from": first_from})
+    return result
+
+
+def _deduplicate(candidates: List[SourceItem]) -> List[SourceItem]:
+    """Keep only the highest-priority tier: mentions > comments/descriptions > field changes."""
+    mentions = [i for i in candidates if i.kind == "mention"]
+    if mentions:
+        return mentions
+    comments = [i for i in candidates if i.kind in ("comment", "description_change")]
+    if comments:
+        return comments
+    return [i for i in candidates if i.kind == "field_change"]
+
+
+def _has_mention(node, account_id: str) -> bool:
+    """Return True if the ADF node tree contains a mention of account_id."""
+    if not account_id:
+        return False
+    if isinstance(node, dict):
+        if node.get("type") == "mention" and node.get("attrs", {}).get("id") == account_id:
+            return True
+        return any(_has_mention(c, account_id) for c in node.get("content", []))
+    if isinstance(node, list):
+        return any(_has_mention(n, account_id) for n in node)
+    return False
 
 
 def _fetch_new_tickets(config, auth_header, since_str) -> List[SourceItem]:
