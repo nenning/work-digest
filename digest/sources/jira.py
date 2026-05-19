@@ -14,7 +14,8 @@ def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[So
     items: List[SourceItem] = []
     items.extend(_fetch_watched(config, auth_header, since, since_str, account_id))
     items.extend(_fetch_new_tickets(config, auth_header, since_str))
-    return items
+    watched_keys = {i.title.split(":")[0] for i in items if i.kind != "new_ticket"}
+    return [i for i in items if not (i.kind == "new_ticket" and i.title.split(":")[0] in watched_keys)]
 
 
 def _get_current_user(config: AtlassianConfig, auth_header: str) -> dict:
