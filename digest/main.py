@@ -27,7 +27,7 @@ from digest.email_sender import send_digest, send_via_com
 from digest.models import SourceItem, SummarizedItem
 from digest.sources import confluence, jira, outlook, teams
 from digest.state import get_last_run, load_state, process_lock, save_state
-from digest.summarizer import summarize_items
+from digest.summarizer import LLMEndpointError, summarize_items
 
 log = logging.getLogger(__name__)
 
@@ -157,7 +157,13 @@ def main() -> None:
         return
 
     with process_lock(data_dir):
-        _run(args, config, state_file, cache_file)
+        while True:
+            try:
+                _run(args, config, state_file, cache_file)
+                break
+            except LLMEndpointError as exc:
+                log.warning("%s — waiting 10 min before retry", exc)
+                time.sleep(600)
 
 
 def _run(args, config, state_file: Path, cache_file: Path) -> None:

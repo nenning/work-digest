@@ -16,6 +16,11 @@ from digest.models import SourceItem, SummarizedItem
 
 log = logging.getLogger(__name__)
 
+
+class LLMEndpointError(RuntimeError):
+    """Raised when >50% of LLM calls fail across all models, suggesting the endpoint is down."""
+
+
 VALID_PRIORITIES = {"action_needed", "meeting_invite", "fyi", "info"}
 # Cap content sent to LLM to avoid token limit rejections (~4k chars ≈ ~1k tokens).
 _CONTENT_MAX_CHARS = 4000
@@ -441,6 +446,24 @@ def summarize_items(
     if model_stats is not None:
         model_stats["times"] = model_times
         model_stats["errors"] = model_errors
+
+    # Detect endpoint-down: >50% of items that called the LLM had all models fail.
+    llm_attempted = len(llm_items)
+    llm_all_failed = sum(
+        1 for idx in llm_results
+        if llm_results[idx][0] is not None
+        and llm_results[idx][0].summary.startswith("[LLM error")
+    )
+    for idx in ticket_results:
+        _, _, timing, failed = ticket_results[idx]
+        if failed or timing is not None:
+            llm_attempted += 1
+            if timing is None and failed:
+                llm_all_failed += 1
+    if llm_attempted > 0 and llm_all_failed / llm_attempted > 0.5:
+        raise LLMEndpointError(
+            f"{llm_all_failed}/{llm_attempted} LLM calls failed — endpoint likely down"
+        )
 
     results: List[SummarizedItem] = []
 
