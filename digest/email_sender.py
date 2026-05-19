@@ -87,6 +87,40 @@ def _safe_url(url: str) -> str:
     return url if scheme in _ALLOWED_URL_SCHEMES else "#"
 
 
+def _format_timing_text(timing: dict) -> str:
+    t_fetch = timing.get("t_fetch", 0)
+    t_sum = timing.get("t_sum", 0)
+    n_fetched = timing.get("n_fetched", 0)
+    n_summarized = timing.get("n_summarized", 0)
+    model_stats = timing.get("model_stats", {})
+
+    sep = "  " + "─" * 30
+    lines = [
+        f"  {'fetch':<11} {t_fetch:5.1f}s   {n_fetched} item{'s' if n_fetched != 1 else ''}",
+        f"  {'summarize':<11} {t_sum:5.1f}s   {n_summarized} item{'s' if n_summarized != 1 else ''}",
+        sep,
+        f"  {'total':<11} {t_fetch + t_sum:5.1f}s",
+    ]
+
+    if model_stats:
+        model_times = model_stats.get("times", {})
+        model_errors = model_stats.get("errors", {})
+        all_models = sorted(set(model_times) | set(model_errors))
+        if all_models:
+            lines += ["", "  Model response times:"]
+            for model in all_models:
+                times = model_times.get(model, [])
+                errs = model_errors.get(model, 0)
+                avg_str = (
+                    f"{sum(times)/len(times):.2f}s avg ({len(times)} call{'s' if len(times) != 1 else ''})"
+                    if times else "no successful calls"
+                )
+                err_str = f", {errs} error{'s' if errs != 1 else ''}" if errs else ""
+                lines.append(f"    {model}: {avg_str}{err_str}")
+
+    return "\n".join(lines)
+
+
 def _pluralise(count: int, singular: str, plural: Optional[str] = None) -> str:
     if plural is None:
         plural = singular + "s"
@@ -108,6 +142,7 @@ def _render_html(
     subject: str,
     notices: Optional[List[str]] = None,
     time_range: Optional[str] = None,
+    timing: Optional[dict] = None,
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
@@ -125,6 +160,7 @@ def _render_html(
         source_labels=SOURCE_LABELS,
         notices=notices or [],
         time_range=time_range,
+        timing_text=_format_timing_text(timing) if timing else None,
     )
 
 
@@ -137,6 +173,7 @@ def send_digest(
     now: Optional[datetime] = None,
     notices: Optional[List[str]] = None,
     time_range: Optional[str] = None,
+    timing: Optional[dict] = None,
 ) -> bool:
     """Render and send (or dry-run) the digest email.
 
@@ -162,7 +199,7 @@ def send_digest(
     n_sources = len({it.source for grp in sections.values() for it in grp})
     _now = now if now is not None else datetime.now().astimezone()
     subject = _build_subject(config.subject_prefix, _now, n_items, n_sources)
-    html_body = _render_html(sections, subject, notices, time_range)
+    html_body = _render_html(sections, subject, notices, time_range, timing)
 
     if dry_run:
         print(f"\nDRY RUN — {subject}\n{'─' * 60}")
@@ -219,6 +256,7 @@ def send_via_com(
     now: Optional[datetime] = None,
     notices: Optional[List[str]] = None,
     time_range: Optional[str] = None,
+    timing: Optional[dict] = None,
 ) -> bool:
     """Render the digest and send (or preview as draft) via Outlook Classic COM.
 
@@ -245,7 +283,7 @@ def send_via_com(
     n_sources = len({it.source for grp in sections.values() for it in grp})
     _now = now if now is not None else datetime.now().astimezone()
     subject = _build_subject(config.subject_prefix, _now, n_items, n_sources)
-    html_body = _render_html(sections, subject, notices, time_range)
+    html_body = _render_html(sections, subject, notices, time_range, timing)
 
     try:
         import win32com.client  # pywin32 — Windows only

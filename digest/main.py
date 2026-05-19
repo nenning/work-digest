@@ -266,6 +266,14 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
     print()
     t_del_start = time.monotonic()
 
+    timing = {
+        "t_fetch": t_fetch_end - t_fetch_start,
+        "t_sum": t_sum_end - t_sum_start,
+        "n_fetched": len(all_items),
+        "n_summarized": len(summarized),
+        "model_stats": model_stats,
+    }
+
     if config.m365.enabled:
         recipient = get_recipient(m365_token)
         if args.dry_run:
@@ -281,6 +289,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
             now=now_local,
             notices=notices,
             time_range=time_range,
+            timing=timing,
         )
     else:
         if not config.email.recipient:
@@ -299,6 +308,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
             now=now_local,
             notices=notices,
             time_range=time_range,
+            timing=timing,
         )
 
     t_del_end = time.monotonic()

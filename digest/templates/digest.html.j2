@@ -185,6 +185,17 @@
       color: #94a3b8;
     }
 
+    /* Timing fine-print */
+    .timing-pre {
+      margin: 10px 0 0;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 10px;
+      color: #cbd5e1;
+      text-align: left;
+      white-space: pre;
+      line-height: 1.6;
+    }
+
     /* Mobile */
     @media (max-width: 600px) {
       .header { padding: 16px 16px; }
@@ -247,6 +258,7 @@
       <!-- Footer -->
       <div class="footer">
         AI-generated summary &middot; all headings link to originals
+        {% if timing_text %}<pre class="timing-pre">{{ timing_text }}</pre>{% endif %}
       </div>
 
         </div>
