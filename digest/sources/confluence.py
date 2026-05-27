@@ -73,17 +73,41 @@ def _cql_search(config: AtlassianConfig, auth_header: str, cql: str) -> list:
 def _fetch_mentions(config: AtlassianConfig, auth_header: str, account_id: str, since_cql: str) -> List[SourceItem]:
     cql = f'mention = "{account_id}" AND created > "{since_cql}"'
     results = _cql_search(config, auth_header, cql)
-    return [
-        SourceItem(
+    items = []
+    for r in results:
+        author = r.get("history", {}).get("createdBy", {}).get("displayName") or "unknown"
+        timestamp = _parse_dt(r.get("history", {}).get("createdDate", since_cql + ":00Z"))
+        if r.get("type") == "comment":
+            content = _fetch_comment_body(config, auth_header, r["id"], author, r["title"])
+        else:
+            content = f"You were mentioned in '{r['title']}' by {author}."
+        items.append(SourceItem(
             source="confluence", kind="mention",
-            title=r["title"],  # clean title — no "Mentioned in:" prefix
+            title=r["title"],
             url=f"{config.url}/wiki{r['_links'].get('webui', '')}",
-            content=f"You were mentioned in '{r['title']}' by {r.get('history', {}).get('createdBy', {}).get('displayName') or 'unknown'}.",
-            author=r.get("history", {}).get("createdBy", {}).get("displayName") or "unknown",
-            timestamp=_parse_dt(r.get("history", {}).get("createdDate", since_cql + ":00Z")),
+            content=content,
+            author=author,
+            timestamp=timestamp,
+        ))
+    return items
+
+
+def _fetch_comment_body(config: AtlassianConfig, auth_header: str, comment_id: str, author: str, fallback_title: str) -> str:
+    try:
+        resp = requests.get(
+            f"{config.url}/wiki/rest/api/content/{comment_id}",
+            headers={"Authorization": auth_header, "Accept": "application/json"},
+            params={"expand": "body.storage"},
+            timeout=30,
         )
-        for r in results
-    ]
+        resp.raise_for_status()
+        storage = resp.json().get("body", {}).get("storage", {}).get("value", "")
+        text = _storage_to_text(storage)
+        if text:
+            return f"{author} hat dich in einem Kommentar erwähnt:\n{text}"
+    except requests.RequestException as exc:
+        log.warning("Failed to fetch comment body %s: %s", comment_id, exc)
+    return f"You were mentioned in '{fallback_title}' by {author}."
 
 
 def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: str, since: datetime) -> List[SourceItem]:
