@@ -11,7 +11,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader
 
 from digest.config import EmailConfig
-from digest.models import SummarizedItem
+from digest.models import SourceItem, SummarizedItem
 
 log = logging.getLogger(__name__)
 
@@ -71,9 +71,13 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 _GRAPH_SEND_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
 _ALLOWED_URL_SCHEMES = {"http", "https"}
 
-# Fail fast at import time if the template file is missing (deployment error).
+# Fail fast at import time if the template files are missing (deployment error).
 assert (TEMPLATES_DIR / "digest.html.j2").exists(), (
     f"Email template missing: {TEMPLATES_DIR / 'digest.html.j2'}. "
+    "Ensure the digest/templates/ directory is present."
+)
+assert (TEMPLATES_DIR / "mgmt_summary.html.j2").exists(), (
+    f"Management summary template missing: {TEMPLATES_DIR / 'mgmt_summary.html.j2'}. "
     "Ensure the digest/templates/ directory is present."
 )
 
@@ -306,6 +310,118 @@ def send_via_com(
             mail.Send()
     except Exception as exc:
         log.error("Failed to send via Outlook COM: %s", exc)
+        return False
+
+    return True
+
+
+def _render_mgmt_html(
+    narrative: str,
+    jira_items: List[SourceItem],
+    confluence_items: List[SourceItem],
+    subject: str,
+    time_range: Optional[str] = None,
+    notices: Optional[List[str]] = None,
+) -> str:
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
+    env.filters["safe_url"] = _safe_url
+    template = env.get_template("mgmt_summary.html.j2")
+
+    paragraphs = [p.strip() for p in narrative.split("\n\n") if p.strip()]
+    if not paragraphs:
+        paragraphs = [narrative.strip()]
+
+    done_tickets = [i for i in jira_items if i.kind == "ticket_done"]
+    wip_tickets  = [i for i in jira_items if i.kind == "ticket_wip"]
+    todo_tickets = [i for i in jira_items if i.kind == "ticket_todo"]
+
+    return template.render(
+        subject=subject,
+        time_range=time_range,
+        notices=notices or [],
+        narrative_paragraphs=paragraphs,
+        done_tickets=done_tickets,
+        wip_tickets=wip_tickets,
+        todo_tickets=todo_tickets,
+        confluence_items=confluence_items,
+    )
+
+
+def send_mgmt_summary(
+    narrative: str,
+    jira_items: List[SourceItem],
+    confluence_items: List[SourceItem],
+    subject: str,
+    config: EmailConfig,
+    m365_token: str,
+    recipient: str,
+    dry_run: bool = False,
+    time_range: Optional[str] = None,
+    notices: Optional[List[str]] = None,
+) -> bool:
+    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices)
+
+    if dry_run:
+        print(f"\nDRY RUN — {subject}\n{'─' * 60}")
+        print(narrative)
+        print(f"\n[{len(jira_items)} Jira tickets, {len(confluence_items)} Confluence pages]")
+        return True
+
+    try:
+        resp = requests.post(
+            _GRAPH_SEND_URL,
+            headers={
+                "Authorization": f"Bearer {m365_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "message": {
+                    "subject": subject,
+                    "body": {"contentType": "HTML", "content": html_body},
+                    "toRecipients": [{"emailAddress": {"address": recipient}}],
+                }
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        log.error("Failed to send management summary email: %s", exc)
+        return False
+
+    return True
+
+
+def send_mgmt_summary_via_com(
+    narrative: str,
+    jira_items: List[SourceItem],
+    confluence_items: List[SourceItem],
+    subject: str,
+    config: EmailConfig,
+    recipient: str,
+    dry_run: bool = False,
+    time_range: Optional[str] = None,
+    notices: Optional[List[str]] = None,
+) -> bool:
+    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices)
+
+    try:
+        import win32com.client
+    except ImportError:
+        log.error("pywin32 is not installed — cannot send via Outlook COM. Run: pip install pywin32")
+        return False
+
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        mail = outlook.CreateItem(0)
+        mail.To = recipient
+        mail.Subject = subject
+        mail.HTMLBody = html_body
+        if dry_run:
+            mail.Display()
+        else:
+            mail.Send()
+    except Exception as exc:
+        log.error("Failed to send management summary via Outlook COM: %s", exc)
         return False
 
     return True

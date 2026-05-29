@@ -23,11 +23,13 @@ import requests
 from digest.auth.atlassian import get_auth_header
 from digest.auth.microsoft import get_token
 from digest.config import load_config
-from digest.email_sender import send_digest, send_via_com
+from digest.email_sender import send_digest, send_mgmt_summary, send_mgmt_summary_via_com, send_via_com
 from digest.models import SourceItem, SummarizedItem
 from digest.sources import confluence, jira, outlook, teams
+from digest.sources.mgmt_jira import fetch_sprint, fetch_team_tickets
+from digest.sources.mgmt_confluence import fetch_team_pages
 from digest.state import get_last_run, load_state, process_lock, save_state
-from digest.summarizer import LLMEndpointError, summarize_items
+from digest.summarizer import LLMEndpointError, summarize_items, synthesize_mgmt_summary
 
 log = logging.getLogger(__name__)
 
@@ -35,20 +37,25 @@ ALL_SOURCES = ["jira", "confluence", "teams", "outlook"]
 
 
 def parse_since(s: str) -> datetime:
-    """Parse a --since string into a UTC-aware datetime.
+    """Parse a time offset or ISO 8601 string into a UTC-aware datetime.
 
     Accepts:
     - "2h"  → now - 2 hours
+    - "7d"  → now - 7 days
+    - "2w"  → now - 2 weeks
     - ISO 8601 string → parsed and forced to UTC if naive
     """
-    if s.endswith("h"):
+    s = s.strip()
+    if s and s[-1] in ("h", "d", "w"):
+        unit = s[-1]
         try:
-            hours = int(s[:-1])
+            n = int(s[:-1])
         except ValueError:
-            raise ValueError(f"Invalid --since value {s!r}: expected format like '2h'") from None
-        if hours <= 0:
-            raise ValueError(f"--since hours must be positive, got {hours!r}")
-        return datetime.now(timezone.utc) - timedelta(hours=hours)
+            raise ValueError(f"Invalid time offset {s!r}: expected format like '2h', '7d', '2w'") from None
+        if n <= 0:
+            raise ValueError(f"Time offset must be positive, got {n!r}")
+        delta = {"h": timedelta(hours=n), "d": timedelta(days=n), "w": timedelta(weeks=n)}[unit]
+        return datetime.now(timezone.utc) - delta
     dt = datetime.fromisoformat(s)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -134,7 +141,39 @@ def main() -> None:
     parser.add_argument(
         "--since",
         default=None,
-        help="Override state-based since timestamp (e.g. '2h' or ISO datetime)",
+        help="Override state-based since timestamp (e.g. '2h', '7d', or ISO datetime)",
+    )
+
+    # Management summary mode
+    parser.add_argument(
+        "--mgmt-summary",
+        action="store_true",
+        help="Generate a team management summary instead of a personal digest",
+    )
+    parser.add_argument(
+        "--from",
+        dest="from_date",
+        default=None,
+        metavar="DATE",
+        help="Start date for management summary (ISO 8601 or offset like '7d')",
+    )
+    parser.add_argument(
+        "--to",
+        dest="to_date",
+        default=None,
+        metavar="DATE",
+        help="End date for management summary (ISO 8601, defaults to now)",
+    )
+    parser.add_argument(
+        "--sprint",
+        default=None,
+        metavar="NAME",
+        help="Sprint name for management summary (auto-derives start/end dates from Jira board)",
+    )
+    parser.add_argument(
+        "--assume-done",
+        action="store_true",
+        help="In management summary: treat in-progress tickets as completed in the narrative",
     )
     args = parser.parse_args()
 
@@ -157,13 +196,148 @@ def main() -> None:
         return
 
     with process_lock(data_dir):
-        while True:
-            try:
-                _run(args, config, state_file, cache_file)
-                break
-            except LLMEndpointError as exc:
-                log.warning("%s — waiting 10 min before retry", exc)
-                time.sleep(600)
+        if args.mgmt_summary:
+            _run_mgmt_summary(args, config, cache_file)
+        else:
+            while True:
+                try:
+                    _run(args, config, state_file, cache_file)
+                    break
+                except LLMEndpointError as exc:
+                    log.warning("%s — waiting 10 min before retry", exc)
+                    time.sleep(600)
+
+
+def _run_mgmt_summary(args, config, cache_file: Path) -> None:
+    mgmt_cfg = config.mgmt_summary
+    if mgmt_cfg is None:
+        raise RuntimeError(
+            "mgmt_summary section is missing from config.yaml. "
+            "Add it with at least jira_jql set to define the team's tickets."
+        )
+
+    # Validate mutually exclusive time options
+    has_sprint = bool(args.sprint)
+    has_range = bool(args.from_date or args.to_date)
+    has_since = bool(args.since)
+    if sum([has_sprint, has_range, has_since]) > 1:
+        raise ValueError("--sprint, --since, and --from/--to are mutually exclusive")
+    if not has_sprint and not has_range and not has_since:
+        raise ValueError(
+            "Management summary requires a time range. "
+            "Use --sprint 'Sprint Name', --since 7d, or --from/--to."
+        )
+
+    atlassian_auth = get_auth_header(config.atlassian)
+    if config.m365.enabled:
+        m365_token: Optional[str] = get_token(
+            config.m365.tenant_id, cache_file, client_id=config.m365.client_id
+        )
+    else:
+        m365_token = None
+
+    now_utc = datetime.now(timezone.utc)
+    sprint_id: Optional[int] = None
+
+    # --- Resolve time range ---
+    if has_sprint:
+        if mgmt_cfg.jira_board_id is None:
+            raise ValueError(
+                "--sprint requires jira_board_id to be set in the mgmt_summary config block"
+            )
+        print(f"Looking up sprint {args.sprint!r} on board {mgmt_cfg.jira_board_id}...")
+        sprint_id, since, until, sprint_label = fetch_sprint(
+            config.atlassian, atlassian_auth, mgmt_cfg.jira_board_id, args.sprint
+        )
+        label = sprint_label
+        print(f"  Sprint found: {sprint_label} ({since.date()} - {until.date()})")
+    elif has_since:
+        since = parse_since(args.since)
+        until = now_utc
+        label = f"{since.strftime('%Y-%m-%d')} – {until.strftime('%Y-%m-%d')}"
+    else:
+        since = parse_since(args.from_date)
+        until = parse_since(args.to_date) if args.to_date else now_utc
+        label = f"{since.strftime('%Y-%m-%d')} – {until.strftime('%Y-%m-%d')}"
+
+    _tz_label = now_utc.astimezone().strftime('%z')
+    _tz_fmt = f"{_tz_label[:3]}:{_tz_label[3:]}" if len(_tz_label) == 5 else _tz_label
+    time_range = f"{label} ({_tz_fmt})"
+    subject = f"[Team Summary] {label}"
+    if args.assume_done:
+        subject += " (as-if done)"
+
+    print(f"Range:  {since.strftime('%Y-%m-%d')} -> {until.strftime('%Y-%m-%d')}")
+    if args.assume_done:
+        print("  assume-done: in-progress tickets treated as completed")
+    print()
+
+    # --- Fetch Jira team tickets ---
+    print("Fetching Jira team tickets...")
+    jira_items, team_account_ids = fetch_team_tickets(
+        config.atlassian, atlassian_auth, mgmt_cfg, since, until, sprint_id=sprint_id
+    )
+    done_n = sum(1 for i in jira_items if i.kind == "ticket_done")
+    wip_n  = sum(1 for i in jira_items if i.kind == "ticket_wip")
+    todo_n = sum(1 for i in jira_items if i.kind == "ticket_todo")
+    print(f"  {len(jira_items)} ticket(s)  ({done_n} done, {wip_n} in-progress, {todo_n} todo)")
+    print(f"  {len(team_account_ids)} unique team member(s)")
+
+    # --- Fetch Confluence team pages ---
+    print("Fetching Confluence team pages...")
+    confluence_items = fetch_team_pages(
+        config.atlassian, atlassian_auth, mgmt_cfg, since, until, team_account_ids
+    )
+    print(f"  {len(confluence_items)} page(s)")
+    print()
+
+    if not jira_items and not confluence_items:
+        print("Nothing found for the given time range.")
+        return
+
+    # --- Synthesize narrative ---
+    print("Synthesizing management narrative...")
+    t_syn_start = time.monotonic()
+    narrative = synthesize_mgmt_summary(
+        jira_items,
+        confluence_items,
+        config.llm,
+        label=label,
+        assume_done=args.assume_done,
+        language=config.language,
+    )
+    t_syn_end = time.monotonic()
+    print(f"  Done ({t_syn_end - t_syn_start:.1f}s)")
+    print()
+
+    # --- Deliver ---
+    recipient_override = mgmt_cfg.recipient
+    if config.m365.enabled:
+        recipient = recipient_override or get_recipient(m365_token)
+        if args.dry_run:
+            print("Dry run — no email sent.")
+        else:
+            print(f"Sending to {recipient}...")
+        send_mgmt_summary(
+            narrative, jira_items, confluence_items,
+            subject, config.email, m365_token, recipient,
+            dry_run=args.dry_run, time_range=time_range,
+        )
+    else:
+        recipient = recipient_override or config.email.recipient
+        if not recipient:
+            raise RuntimeError(
+                "email.recipient (or mgmt_summary.recipient) must be set when m365.enabled is false"
+            )
+        if args.dry_run:
+            print("Dry run - opening Outlook draft...")
+        else:
+            print(f"Sending via Outlook COM to {recipient}...")
+        send_mgmt_summary_via_com(
+            narrative, jira_items, confluence_items,
+            subject, config.email, recipient,
+            dry_run=args.dry_run, time_range=time_range,
+        )
 
 
 def _run(args, config, state_file: Path, cache_file: Path) -> None:

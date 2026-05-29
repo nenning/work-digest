@@ -126,7 +126,7 @@ def _build_prompt(item: SourceItem, language: str = "de") -> str:
 def _call_llm(prompt: str, config: LLMConfig, model: str) -> str:
     """Call the configured LLM with the given model and return the raw response text."""
     if config.provider in ("openai", "azure_openai"):
-        return _call_openai(prompt, config, model)
+        return _call_openai(prompt, config, model, json_mode=True)
     return _call_anthropic(prompt, config, model)
 
 
@@ -157,7 +157,7 @@ def _call_llm_timed(prompt: str, config: LLMConfig, model: str) -> tuple[str, fl
     return result[0], elapsed[0]
 
 
-def _call_openai(prompt: str, config: LLMConfig, model: str) -> str:
+def _call_openai(prompt: str, config: LLMConfig, model: str, json_mode: bool = True) -> str:
     if config.provider == "azure_openai":
         client = openai.AzureOpenAI(
             api_key=config.api_key,
@@ -170,17 +170,20 @@ def _call_openai(prompt: str, config: LLMConfig, model: str) -> str:
             kwargs["base_url"] = config.endpoint
         client = openai.OpenAI(**kwargs)
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
+    create_kwargs: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if json_mode:
+        create_kwargs["response_format"] = {"type": "json_object"}
+
+    response = client.chat.completions.create(**create_kwargs)
     if not response.choices:
         raise ValueError("LLM returned empty choices list")
     return response.choices[0].message.content
 
 
-def _call_anthropic(prompt: str, config: LLMConfig, model: str) -> str:
+def _call_anthropic(prompt: str, config: LLMConfig, model: str, max_tokens: int = 500) -> str:
     kwargs: dict = {"api_key": config.api_key}
     if config.endpoint:
         kwargs["base_url"] = config.endpoint
@@ -188,7 +191,7 @@ def _call_anthropic(prompt: str, config: LLMConfig, model: str) -> str:
 
     response = client.messages.create(
         model=model,
-        max_tokens=500,
+        max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
     if not response.content:
@@ -479,3 +482,93 @@ def summarize_items(
             results.append(summarized)
 
     return results
+
+
+_MAX_MGMT_TICKETS = 150
+_MAX_TICKET_DESC_CHARS = 250
+
+
+def synthesize_mgmt_summary(
+    jira_items: "List[SourceItem]",
+    confluence_items: "List[SourceItem]",
+    config: LLMConfig,
+    label: str,
+    assume_done: bool = False,
+    language: str = "de",
+) -> str:
+    """Produce a single management narrative from team Jira tickets and Confluence pages.
+
+    Makes one LLM call (no JSON mode) and returns the plain-text narrative.
+    """
+    from digest.models import SourceItem  # local import to avoid circular
+
+    lang = _language_name(language)
+
+    done = [i for i in jira_items if i.kind == "ticket_done"]
+    wip  = [i for i in jira_items if i.kind == "ticket_wip"]
+    todo = [i for i in jira_items if i.kind == "ticket_todo"]
+
+    def _fmt_ticket(item: SourceItem) -> str:
+        assignee = item.metadata.get("assignee", item.author)
+        status = item.metadata.get("status", "")
+        desc_start = item.content.find(". ", item.content.find(". ") + 1)
+        desc = item.content[desc_start + 2:desc_start + 2 + _MAX_TICKET_DESC_CHARS].strip() if desc_start >= 0 else ""
+        base = f"- {item.title} [{assignee}]"
+        return f"{base}: {desc}" if desc else base
+
+    def _fmt_section(items: "List[SourceItem]", label_str: str) -> str:
+        if not items:
+            return f"{label_str} (0 tickets): —"
+        lines = [_fmt_ticket(i) for i in items[:_MAX_MGMT_TICKETS]]
+        if len(items) > _MAX_MGMT_TICKETS:
+            lines.append(f"  … and {len(items) - _MAX_MGMT_TICKETS} more")
+        return f"{label_str} ({len(items)} ticket{'s' if len(items) != 1 else ''}):\n" + "\n".join(lines)
+
+    def _fmt_pages(pages: "List[SourceItem]") -> str:
+        if not pages:
+            return "Documentation updated (0 pages): —"
+        lines = [f"- {p.title} (by {p.author})" for p in pages]
+        return f"Documentation updated ({len(pages)} page{'s' if len(pages) != 1 else ''}):\n" + "\n".join(lines)
+
+    if assume_done:
+        assume_instruction = (
+            "Treat ALL in-progress and not-yet-started tickets as if they were completed "
+            "and delivered by the team. Present everything as accomplished."
+        )
+    else:
+        assume_instruction = "Clearly distinguish between what is done and what is still in progress."
+
+    total_tickets = len(jira_items)
+    prompt = (
+        f"Write a management summary for {label}.\n"
+        f"Audience: Non-technical management.\n"
+        f"Language: Write entirely in {lang}.\n"
+        f"{assume_instruction}\n\n"
+        f"Guidelines:\n"
+        f"- 2–3 paragraphs of cohesive prose\n"
+        f"- Group related work thematically — do NOT list individual ticket IDs\n"
+        f"- Highlight key deliverables and outcomes\n"
+        f"- Mention documentation work only if significant\n"
+        f"- Total tickets: {total_tickets}\n\n"
+        f"{_fmt_section(done, 'DONE')}\n\n"
+        f"{_fmt_section(wip, 'IN PROGRESS')}\n\n"
+        f"{_fmt_section(todo, 'TODO / NOT STARTED')}\n\n"
+        f"{_fmt_pages(confluence_items)}\n\n"
+        f"Write only the narrative. No headers, no bullet points, no ticket IDs."
+    )
+
+    errors: list = []
+    for model in config.models + config.fallback_models:
+        try:
+            log.info("Synthesizing management summary with model %s...", model)
+            if config.provider in ("openai", "azure_openai"):
+                return _call_openai(prompt, config, model, json_mode=False)
+            else:
+                return _call_anthropic(prompt, config, model, max_tokens=1500)
+        except Exception as exc:
+            errors.append(f"{model}: {exc}")
+            log.warning("Model %s failed for synthesis: %s", model, exc)
+
+    raise RuntimeError(
+        f"All LLM models failed for management summary synthesis: {'; '.join(errors)}"
+    )

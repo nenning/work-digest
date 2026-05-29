@@ -38,3 +38,14 @@ email:
 language: de   # ISO 639-1 output language for LLM summaries (de | en | fr | es | it | ...)
 
 data_dir: ~/.digest
+
+# Management summary mode (--mgmt-summary flag). Optional — only needed for that mode.
+# mgmt_summary:
+#   jira_jql: "project = PP"              # required — base JQL defining the team's tickets
+#   jira_board_id: 123                    # required for --sprint lookup; find it in the board URL
+#   ignore_users: []                      # display names of users to exclude (e.g. bots, testers)
+#   ignore_issue_types:                   # issue types to skip entirely
+#     - "Xray Test"
+#     - "Test Plan"
+#     - "Sub-Test Execution"
+#   recipient: ""                         # optional — who to send the summary to (defaults to your own address)

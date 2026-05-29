@@ -223,8 +223,63 @@ Then run with `--dry-run` to see detailed output without sending email.
 - `python main.py --setup-auth` — Authenticate with M365 (device code flow)
 - `python main.py --dry-run` — Test digest without sending email
 - `python main.py --dry-run --source jira` — Test single source (jira, confluence, teams, outlook)
-- `python main.py --since 2h` — Fetch activity from last 2 hours instead of last run
+- `python main.py --since 2h` — Fetch activity from last 2 hours instead of last run (`2h`, `7d`, `2w` or ISO datetime)
 - `python main.py` — Normal run: fetch, summarize, send email
+- `python main.py --mgmt-summary --sprint current` — Team management summary for the active sprint
+- `python main.py --mgmt-summary --sprint "Sprint 42"` — Team management summary for a named sprint
+- `python main.py --mgmt-summary --sprint "Sprint 42" --assume-done` — Same, treating in-progress as done
+- `python main.py --mgmt-summary --since 7d` — Team summary for the last 7 days
+- `python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29` — Team summary for an explicit date range
+
+## Management Summary Mode
+
+The `--mgmt-summary` flag switches to a team-wide view: it fetches all Jira tickets matching your configured team JQL and all Confluence pages updated by team members, then produces a single cohesive narrative suitable for a management audience.
+
+### Configuration
+
+Add the `mgmt_summary` block to `config.yaml`:
+
+```yaml
+mgmt_summary:
+  jira_jql: "project = PP"              # required — JQL defining your team's tickets
+  jira_board_id: 123                    # required for --sprint; find it in your board URL
+  ignore_users: ["xray-bot"]            # display names to exclude (bots, testers, etc.)
+  ignore_issue_types:                   # issue types to skip entirely
+    - "Xray Test"
+    - "Test Plan"
+  recipient: "manager@company.com"      # optional — who to send to (defaults to your own address)
+```
+
+### Usage
+
+```bash
+# Active sprint (requires jira_board_id in config)
+python main.py --mgmt-summary --sprint current
+
+# Named sprint
+python main.py --mgmt-summary --sprint "Sprint 42"
+
+# Sprint summary as-if everything is done (useful before sprint end)
+python main.py --mgmt-summary --sprint "Sprint 42" --assume-done
+python main.py --mgmt-summary --sprint current --assume-done
+
+# Last 7 days — dry run
+python main.py --mgmt-summary --since 7d --dry-run
+
+# Explicit date range
+python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29
+```
+
+### What it does
+
+1. Fetches all Jira tickets matching `mgmt_summary.jira_jql` for the given time range or sprint
+2. Collects team members from ticket assignees/reporters
+3. Fetches Confluence pages updated by those team members in the same window
+4. Filters out ignored users and issue types
+5. Makes a single LLM call to produce a 2–3 paragraph management narrative
+6. Sends an HTML email with the narrative and a supporting ticket table
+
+Management summary runs never update `state.json`.
 
 ## How It Works
 
@@ -276,22 +331,27 @@ If a source fails (network error, API down), its timestamp is **not** updated �
 
 ```
 digest/
-  main.py           # CLI entry point
-  config.py         # YAML configuration loader
-  models.py         # Data models (SourceItem, SummarizedItem)
-  state.py          # Persistent state management
-  summarizer.py     # LLM summarization logic
-  email_sender.py   # Graph API email sending
-  sources/          # Activity fetchers
-    jira.py
-    confluence.py
-    teams.py
-    outlook.py
+  main.py               # CLI entry point
+  config.py             # YAML configuration loader
+  models.py             # Data models (SourceItem, SummarizedItem)
+  state.py              # Persistent state management
+  summarizer.py         # LLM summarization logic (per-item + mgmt narrative synthesis)
+  email_sender.py       # Graph API / COM email sending
+  sources/              # Activity fetchers
+    jira.py             # Personal digest: watched tickets, mentions
+    confluence.py       # Personal digest: mentions, page updates
+    teams.py            # Personal digest: channel + DM messages
+    outlook.py          # Personal digest: inbox emails
+    mgmt_jira.py        # Management summary: team tickets + sprint lookup
+    mgmt_confluence.py  # Management summary: team Confluence pages
+  templates/
+    digest.html.j2      # Personal digest HTML email template
+    mgmt_summary.html.j2  # Management summary HTML email template
   auth/
-    atlassian.py    # Jira/Confluence auth
-    microsoft.py    # M365 device code flow auth
-setup.bat           # Task Scheduler registration script
-config.yaml.example # Configuration template
+    atlassian.py        # Jira/Confluence auth
+    microsoft.py        # M365 device code flow auth
+setup.bat               # Task Scheduler registration script
+config.yaml.example     # Configuration template
 ```
 
 ## Notes

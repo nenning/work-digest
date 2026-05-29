@@ -24,8 +24,15 @@ python digest/main.py --dry-run
 # Single source dry-run
 python digest/main.py --dry-run --source jira   # jira | confluence | teams | outlook
 
-# Override time window
+# Override time window (h/d/w suffixes supported)
 python digest/main.py --since 24h
+
+# Management summary mode
+python digest/main.py --mgmt-summary --sprint current --dry-run
+python digest/main.py --mgmt-summary --sprint "Sprint 42" --dry-run
+python digest/main.py --mgmt-summary --sprint "Sprint 42" --assume-done
+python digest/main.py --mgmt-summary --since 7d --dry-run
+python digest/main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29
 
 # Run all tests
 python -m pytest tests/ -v
@@ -58,13 +65,19 @@ digest/sources/
   confluence.py         Mentions + page updates (CQL); deduplicates per page
   teams.py              Channel messages + DMs via Graph API
   outlook.py            Inbox messages via Graph API
+  mgmt_jira.py          Management summary: paginated team ticket fetch; sprint lookup via
+                        GET /rest/agile/1.0/board/{id}/sprint; kinds: ticket_done/wip/todo
+  mgmt_confluence.py    Management summary: pages filtered by team accountIds (CQL lastModifier in)
 digest/templates/
   digest.html.j2        Inline-CSS responsive HTML email template
+  mgmt_summary.html.j2  Management summary template: narrative block + supporting ticket table
 ```
 
-**Data flow:** `main.py` → parallel fetch (ThreadPoolExecutor, 4 workers) → merge all `SourceItem` lists → `summarizer.summarize_items()` → `email_sender.send()` or local draft → update `state.json`.
+**Personal digest data flow:** `main.py` → parallel fetch (ThreadPoolExecutor, 4 workers) → merge all `SourceItem` lists → `summarizer.summarize_items()` → `email_sender.send()` or local draft → update `state.json`.
 
-State is only written on a successful send, never on `--dry-run`.
+**Management summary data flow:** `main.py --mgmt-summary` → resolve time range (sprint/since/from-to) → `mgmt_jira.fetch_team_tickets()` → derive team_account_ids → `mgmt_confluence.fetch_team_pages()` → `summarizer.synthesize_mgmt_summary()` (single LLM call, free-text narrative) → `email_sender.send_mgmt_summary()`. State is never updated.
+
+State is only written on a successful personal digest send, never on `--dry-run` and never in `--mgmt-summary` mode.
 
 ## Key design decisions
 
@@ -74,10 +87,12 @@ State is only written on a successful send, never on `--dry-run`.
 - **Fallback model:** If the primary LLM call fails, `summarizer.py` retries with `fallback_model` if configured.
 - **Outlook priority:** Outlook items are classified as `action_needed / meeting_invite / fyi / info` and color-coded in the HTML template.
 - **URL safety:** `email_sender.py` allows only `http`/`https` URLs to prevent `javascript:` injection.
+- **Management summary:** `--mgmt-summary` mode fetches all team tickets via a configurable `mgmt_summary.jira_jql`, derives team members from assignee/reporter accountIds, fetches Confluence pages by those accountIds (CQL `lastModifier in (...)`), then makes a single free-text LLM call (`synthesize_mgmt_summary()`) to produce a 2–3 paragraph narrative. Individual per-item summarization is skipped. The `--assume-done` flag instructs the LLM to present in-progress and todo tickets as completed.
+- **Sprint lookup:** Paginates `GET /rest/agile/1.0/board/{boardId}/sprint` with case-insensitive name match. Requires `mgmt_summary.jira_board_id` in config.
 
 ## Configuration
 
-Copy `digest/config.yaml.example` → `digest/config.yaml`. Required fields: Atlassian URL/email/token, LLM provider/key/model, `schedule.times`. Optional: `m365` block (tenant_id, client_id), `llm.endpoint` for Azure, `llm.fallback_model`.
+Copy `digest/config.yaml.example` → `digest/config.yaml`. Required fields: Atlassian URL/email/token, LLM provider/key/model, `schedule.times`. Optional: `m365` block (tenant_id, client_id), `llm.endpoint` for Azure, `llm.fallback_model`. For management summary: `mgmt_summary` block with at minimum `jira_jql`.
 
 ## Testing
 

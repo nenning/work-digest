@@ -47,6 +47,15 @@ class EmailConfig:
 
 
 @dataclass
+class MgmtSummaryConfig:
+    jira_jql: str                            # base JQL that defines the team's tickets
+    jira_board_id: Optional[int] = None      # board ID required for --sprint lookup
+    ignore_users: List[str] = field(default_factory=list)   # display names to exclude
+    ignore_issue_types: List[str] = field(default_factory=list)  # issue types to skip
+    recipient: Optional[str] = None          # override send-to (empty = same as normal digest)
+
+
+@dataclass
 class Config:
     atlassian: AtlassianConfig
     m365: M365Config
@@ -55,6 +64,23 @@ class Config:
     email: EmailConfig
     data_dir: Path
     language: str = "de"  # ISO 639-1 code; used for LLM output language
+    mgmt_summary: Optional[MgmtSummaryConfig] = None
+
+
+def _load_mgmt_summary(raw: Optional[dict]) -> Optional[MgmtSummaryConfig]:
+    if not raw:
+        return None
+    jql = raw.get("jira_jql")
+    if not jql:
+        raise ValueError("mgmt_summary.jira_jql is required when mgmt_summary is configured")
+    board_id = raw.get("jira_board_id")
+    return MgmtSummaryConfig(
+        jira_jql=jql,
+        jira_board_id=int(board_id) if board_id is not None else None,
+        ignore_users=raw.get("ignore_users") or [],
+        ignore_issue_types=raw.get("ignore_issue_types") or [],
+        recipient=raw.get("recipient") or None,
+    )
 
 
 def load_config(path: Path) -> Config:
@@ -107,4 +133,5 @@ def load_config(path: Path) -> Config:
         ),
         data_dir=Path(raw.get("data_dir", "~/.digest")).expanduser(),
         language=raw.get("language", "de"),
+        mgmt_summary=_load_mgmt_summary(raw.get("mgmt_summary")),
     )
