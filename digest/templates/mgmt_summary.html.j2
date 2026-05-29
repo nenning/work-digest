@@ -31,6 +31,9 @@
     }
     .narrative p { margin: 0 0 14px; }
     .narrative p:last-child { margin-bottom: 0; }
+    .narrative-bullets { margin: 0; padding-left: 20px; }
+    .narrative-bullets li { margin-bottom: 10px; }
+    .narrative-bullets li:last-child { margin-bottom: 0; }
     .tickets-section {
       padding: 20px 28px 24px;
     }
@@ -101,9 +104,13 @@
         {% endif %}
 
         <div class="narrative">
-          {% for para in narrative_paragraphs %}
-          <p>{{ para }}</p>
-          {% endfor %}
+          {% if bullet_items %}
+          <ul class="narrative-bullets">
+            {% for item in bullet_items %}<li>{{ item }}</li>{% endfor %}
+          </ul>
+          {% else %}
+          {% for para in narrative_paragraphs %}<p>{{ para }}</p>{% endfor %}
+          {% endif %}
         </div>
 
         {% if done_tickets or wip_tickets or todo_tickets or confluence_items %}

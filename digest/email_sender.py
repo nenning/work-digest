@@ -327,9 +327,14 @@ def _render_mgmt_html(
     env.filters["safe_url"] = _safe_url
     template = env.get_template("mgmt_summary.html.j2")
 
-    paragraphs = [p.strip() for p in narrative.split("\n\n") if p.strip()]
-    if not paragraphs:
-        paragraphs = [narrative.strip()]
+    lines = [ln.strip() for ln in narrative.strip().splitlines() if ln.strip()]
+    bullet_items = [ln[2:] for ln in lines if ln.startswith("- ")]
+    if bullet_items:
+        paragraphs = []
+    else:
+        paragraphs = [p.strip() for p in narrative.split("\n\n") if p.strip()]
+        if not paragraphs:
+            paragraphs = [narrative.strip()]
 
     done_tickets = [i for i in jira_items if i.kind == "ticket_done"]
     wip_tickets  = [i for i in jira_items if i.kind == "ticket_wip"]
@@ -340,6 +345,7 @@ def _render_mgmt_html(
         time_range=time_range,
         notices=notices or [],
         narrative_paragraphs=paragraphs,
+        bullet_items=bullet_items,
         done_tickets=done_tickets,
         wip_tickets=wip_tickets,
         todo_tickets=todo_tickets,
