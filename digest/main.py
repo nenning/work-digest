@@ -175,6 +175,11 @@ def main() -> None:
         action="store_true",
         help="In management summary: treat in-progress tickets as completed in the narrative",
     )
+    parser.add_argument(
+        "--short",
+        action="store_true",
+        help="In management summary: produce a very short executive bullet list instead of paragraphs",
+    )
     args = parser.parse_args()
 
     # Load config.yaml from the same directory as main.py so it works regardless of CWD.
@@ -305,6 +310,7 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
         label=label,
         assume_done=args.assume_done,
         language=config.language,
+        short=args.short,
     )
     t_syn_end = time.monotonic()
     print(f"  Done ({t_syn_end - t_syn_start:.1f}s)")

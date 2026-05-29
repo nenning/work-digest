@@ -495,6 +495,7 @@ def synthesize_mgmt_summary(
     label: str,
     assume_done: bool = False,
     language: str = "de",
+    short: bool = False,
 ) -> str:
     """Produce a single management narrative from team Jira tickets and Confluence pages.
 
@@ -539,23 +540,41 @@ def synthesize_mgmt_summary(
         assume_instruction = "Clearly distinguish between what is done and what is still in progress."
 
     total_tickets = len(jira_items)
-    prompt = (
-        f"Write a management summary for {label}.\n"
-        f"Audience: Non-technical management.\n"
-        f"Language: Write entirely in {lang}.\n"
-        f"{assume_instruction}\n\n"
-        f"Guidelines:\n"
-        f"- 2–3 paragraphs of cohesive prose\n"
-        f"- Group related work thematically — do NOT list individual ticket IDs\n"
-        f"- Highlight key deliverables and outcomes\n"
-        f"- Mention documentation work only if significant\n"
-        f"- Total tickets: {total_tickets}\n\n"
-        f"{_fmt_section(done, 'DONE')}\n\n"
-        f"{_fmt_section(wip, 'IN PROGRESS')}\n\n"
-        f"{_fmt_section(todo, 'TODO / NOT STARTED')}\n\n"
-        f"{_fmt_pages(confluence_items)}\n\n"
-        f"Write only the narrative. No headers, no bullet points, no ticket IDs."
-    )
+
+    if short:
+        prompt = (
+            f"Write a very short executive summary for {label}.\n"
+            f"Language: Write entirely in {lang}.\n"
+            f"{assume_instruction}\n\n"
+            f"Rules:\n"
+            f"- Maximum 5 bullet points\n"
+            f"- Each bullet is one short sentence\n"
+            f"- No ticket IDs, no technical terms, no jargon\n"
+            f"- Focus only on the most important outcomes\n"
+            f"- Total tickets: {total_tickets}\n\n"
+            f"{_fmt_section(done, 'DONE')}\n\n"
+            f"{_fmt_section(wip, 'IN PROGRESS')}\n\n"
+            f"{_fmt_section(todo, 'TODO / NOT STARTED')}\n\n"
+            f"Write only the bullet list using '- ' as bullet marker. No intro sentence, no closing sentence."
+        )
+    else:
+        prompt = (
+            f"Write a management summary for {label}.\n"
+            f"Audience: Non-technical management.\n"
+            f"Language: Write entirely in {lang}.\n"
+            f"{assume_instruction}\n\n"
+            f"Guidelines:\n"
+            f"- 2-3 paragraphs of cohesive prose\n"
+            f"- Group related work thematically — do NOT list individual ticket IDs\n"
+            f"- Highlight key deliverables and outcomes\n"
+            f"- Mention documentation work only if significant\n"
+            f"- Total tickets: {total_tickets}\n\n"
+            f"{_fmt_section(done, 'DONE')}\n\n"
+            f"{_fmt_section(wip, 'IN PROGRESS')}\n\n"
+            f"{_fmt_section(todo, 'TODO / NOT STARTED')}\n\n"
+            f"{_fmt_pages(confluence_items)}\n\n"
+            f"Write only the narrative. No headers, no bullet points, no ticket IDs."
+        )
 
     errors: list = []
     for model in config.models + config.fallback_models:

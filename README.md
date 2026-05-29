@@ -228,6 +228,8 @@ Then run with `--dry-run` to see detailed output without sending email.
 - `python main.py --mgmt-summary --sprint current` — Team management summary for the active sprint
 - `python main.py --mgmt-summary --sprint "Sprint 42"` — Team management summary for a named sprint
 - `python main.py --mgmt-summary --sprint "Sprint 42" --assume-done` — Same, treating in-progress as done
+- `python main.py --mgmt-summary --sprint current --short` — Very short executive bullet list (max 5 bullets)
+- `python main.py --mgmt-summary --sprint current --assume-done --short` — Short + assume done
 - `python main.py --mgmt-summary --since 7d` — Team summary for the last 7 days
 - `python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29` — Team summary for an explicit date range
 
@@ -262,6 +264,10 @@ python main.py --mgmt-summary --sprint "Sprint 42"
 # Sprint summary as-if everything is done (useful before sprint end)
 python main.py --mgmt-summary --sprint "Sprint 42" --assume-done
 python main.py --mgmt-summary --sprint current --assume-done
+
+# Very short executive bullet list (max 5 bullets, no technical detail)
+python main.py --mgmt-summary --sprint current --short
+python main.py --mgmt-summary --sprint current --assume-done --short
 
 # Last 7 days — dry run
 python main.py --mgmt-summary --since 7d --dry-run

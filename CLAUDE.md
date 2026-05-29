@@ -31,6 +31,7 @@ python digest/main.py --since 24h
 python digest/main.py --mgmt-summary --sprint current --dry-run
 python digest/main.py --mgmt-summary --sprint "Sprint 42" --dry-run
 python digest/main.py --mgmt-summary --sprint "Sprint 42" --assume-done
+python digest/main.py --mgmt-summary --sprint current --short --dry-run
 python digest/main.py --mgmt-summary --since 7d --dry-run
 python digest/main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29
 
