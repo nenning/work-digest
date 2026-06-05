@@ -2,9 +2,21 @@ import re
 import requests
 import warnings
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
+
+
+def _load_field_ignore() -> set:
+    path = Path(__file__).parent.parent.parent / "jira_field_ignore.txt"
+    if not path.exists():
+        return set()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return {l.strip().lower() for l in lines if l.strip() and not l.startswith("#")}
+
+
+_IGNORED_FIELDS = _load_field_ignore()
 
 
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
@@ -167,6 +179,8 @@ def _collect_candidates(
         for change in history.get("items", []):
             field = change.get("field", "")
             if field in ("comment", "Attachment"):
+                continue
+            if field.lower() in _IGNORED_FIELDS:
                 continue
             if field == "description":
                 desc_node = issue["fields"].get("description") or ""
