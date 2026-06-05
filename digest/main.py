@@ -106,7 +106,7 @@ def _print_model_stats(model_stats: dict) -> None:
 
 
 def _print_timing(t_fetch: float, t_sum: float, t_del: float, n_fetched: int, n_summarized: int) -> None:
-    sep = "  " + "─" * 30
+    sep = "  " + "-" * 30
     print()
     print(f"  {'fetch':<11} {t_fetch:5.1f}s   {n_fetched} items")
     print(f"  {'summarize':<11} {t_sum:5.1f}s   {n_summarized} items")
@@ -209,7 +209,7 @@ def main() -> None:
                     _run(args, config, state_file, cache_file)
                     break
                 except LLMEndpointError as exc:
-                    log.warning("%s — waiting 10 min before retry", exc)
+                    log.warning("%s -- waiting 10 min before retry", exc)
                     time.sleep(600)
 
 
@@ -259,11 +259,11 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
     elif has_since:
         since = parse_since(args.since)
         until = now_utc
-        label = f"{since.strftime('%Y-%m-%d')} – {until.strftime('%Y-%m-%d')}"
+        label = f"{since.strftime('%Y-%m-%d')} - {until.strftime('%Y-%m-%d')}"
     else:
         since = parse_since(args.from_date)
         until = parse_since(args.to_date) if args.to_date else now_utc
-        label = f"{since.strftime('%Y-%m-%d')} – {until.strftime('%Y-%m-%d')}"
+        label = f"{since.strftime('%Y-%m-%d')} - {until.strftime('%Y-%m-%d')}"
 
     _tz_label = now_utc.astimezone().strftime('%z')
     _tz_fmt = f"{_tz_label[:3]}:{_tz_label[3:]}" if len(_tz_label) == 5 else _tz_label
@@ -321,7 +321,7 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
     if config.m365.enabled:
         recipient = recipient_override or get_recipient(m365_token)
         if args.dry_run:
-            print("Dry run — no email sent.")
+            print("Dry run -- no email sent.")
         else:
             print(f"Sending to {recipient}...")
         send_mgmt_summary(
@@ -364,7 +364,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
     if not config.m365.enabled:
         excluded = [s for s in sources_to_run if s in _M365_SOURCES]
         if excluded:
-            log.info("M365 disabled — skipping sources: %s", ", ".join(excluded))
+            log.info("M365 disabled -- skipping sources: %s", ", ".join(excluded))
         sources_to_run = [s for s in sources_to_run if s not in _M365_SOURCES]
     if not sources_to_run:
         print("No sources to fetch (all requested sources require M365 which is disabled).")
@@ -389,7 +389,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
     if args.since:
         since_override = parse_since(args.since)
         range_start = since_override
-        print(f"Range:  {since_override.strftime('%Y-%m-%d %H:%M')} → {now_utc.strftime('%Y-%m-%d %H:%M')} UTC  (--since {args.since})")
+        print(f"Range:  {since_override.strftime('%Y-%m-%d %H:%M')} -> {now_utc.strftime('%Y-%m-%d %H:%M')} UTC  (--since {args.since})")
     else:
         range_start = min(get_last_run(state, src) for src in sources_to_run)
         print(f"Range:  (per source, now = {now_utc.strftime('%Y-%m-%d %H:%M')} UTC)")
@@ -402,9 +402,9 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
     _tz_fmt = f"{_tz_label[:3]}:{_tz_label[3:]}" if len(_tz_label) == 5 else _tz_label
     if range_start.year > 1970:
         _start_local = range_start.astimezone()
-        time_range = f"{_start_local.strftime('%Y-%m-%d %H:%M')} → {now_local.strftime('%Y-%m-%d %H:%M')} ({_tz_fmt})"
+        time_range = f"{_start_local.strftime('%Y-%m-%d %H:%M')} -> {now_local.strftime('%Y-%m-%d %H:%M')} ({_tz_fmt})"
     else:
-        time_range = f"All time → {now_local.strftime('%Y-%m-%d %H:%M')} ({_tz_fmt})"
+        time_range = f"All time -> {now_local.strftime('%Y-%m-%d %H:%M')} ({_tz_fmt})"
     print()
 
     # --- Fetch ---
@@ -457,7 +457,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
     if config.m365.enabled:
         recipient = get_recipient(m365_token)
         if args.dry_run:
-            print("Dry run — no email sent.")
+            print("Dry run -- no email sent.")
         else:
             print(f"Sending to {recipient}...")
         sent = send_digest(
@@ -477,7 +477,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
                 "email.recipient must be set in config.yaml when m365.enabled is false"
             )
         if args.dry_run:
-            print("Dry run — opening Outlook draft...")
+            print("Dry run -- opening Outlook draft...")
         else:
             print(f"Sending via Outlook COM to {config.email.recipient}...")
         sent = send_via_com(

@@ -38,12 +38,12 @@ for /f "tokens=*" %%t in (times.tmp) do (
     set TIME=%%t
     set TASKNAME=WorkDigest-!TIME::=-!
     echo Registering !TASKNAME! at %%t...
-    schtasks /create /tn "!TASKNAME!" /tr "\"!PYTHON_EXE!\" \"!SCRIPT_DIR!digest\main.py\"" /sc weekly /d MON,TUE,WED,THU,FRI /st %%t /ru "%USERNAME%" /f
+    schtasks /create /tn "!TASKNAME!" /tr "\"!PYTHON_EXE!\" \"!SCRIPT_DIR!run_digest.py\"" /sc weekly /d MON,TUE,WED,THU,FRI /st %%t /ru "%USERNAME%" /f
     if !errorlevel! neq 0 (
         echo   WARNING: Failed to register !TASKNAME!
     ) else (
         set "PS_PYTHON=!PYTHON_EXE!"
-        set "PS_MAINPY=!SCRIPT_DIR!digest\main.py"
+        set "PS_MAINPY=!SCRIPT_DIR!run_digest.py"
         set "PS_WORKDIR=!SCRIPT_DIR!"
         powershell -NonInteractive -Command "$t=Get-ScheduledTask '!TASKNAME!'; $a=New-ScheduledTaskAction -Execute $env:PS_PYTHON -Argument ([char]34+$env:PS_MAINPY+[char]34) -WorkingDirectory $env:PS_WORKDIR; $s=$t.Settings; $s.DisallowStartIfOnBatteries=$false; $s.StopIfGoingOnBatteries=$false; $s.StartWhenAvailable=$true; $s.ExecutionTimeLimit='PT1H'; Set-ScheduledTask '!TASKNAME!' -Action $a -Settings $s | Out-Null"
         if !errorlevel! neq 0 (
@@ -59,5 +59,5 @@ echo.
 echo Registered tasks:
 schtasks /query /fo TABLE | findstr /i "WorkDigest"
 echo.
-echo Run manually with: "!PYTHON_EXE!" digest\main.py --dry-run
+echo Run manually with: "!PYTHON_EXE!" run_digest.py --dry-run
 echo.

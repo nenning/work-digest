@@ -150,10 +150,10 @@ Once you've tested and confirmed the tool works, set up automatic daily runs.
 Run the setup script **as Administrator**:
 
 ```bash
-setup.bat
+schedule-digest.bat
 ```
 
-This reads the times from `config.yaml` (`schedule.times`) and creates a scheduled task for each time.
+This reads the times from `config.yaml` (`schedule.times`) and creates a scheduled task for each time. Tasks are registered to run via `run_digest.py` (a thin stdlib-only wrapper); if a run fails for any reason — including broken dependencies — a Windows error dialog appears on your desktop with the full error message. Press Ctrl+C inside the dialog to copy the text.
 
 Example: If `schedule.times: ["08:00", "13:00", "17:00"]`, three tasks are created:
 - `WorkDigest-08-00` — runs at 08:00
@@ -203,6 +203,8 @@ schtasks /delete /tn "WorkDigest-08-00" /f
 | `openai.APIError: 401 ...` | Invalid LLM API key | Check your LLM provider API key in `config.yaml` |
 | Digest not sent | Check email address resolved from M365 | Ensure your Microsoft 365 account has a valid primary email address |
 | `pywin32 is not installed` | Local draft mode requires pywin32 | Run `pip install pywin32` |
+| Scheduled task fails with no visible error | Import-time dependency failure (tasks registered against old `main.py` path) | Re-run `schedule-digest.bat` to re-register tasks against `run_digest.py` |
+| Dependency version mismatch at startup | Conflicting package upgrades (e.g. `pydantic-core`) | Run `pip install --force-reinstall pydantic` or `pip install -r requirements.txt` |
 | Outlook draft doesn't open | COM automation failed (Outlook not running or not installed) | Open Outlook Classic first, then retry |
 
 ### Debug Mode
@@ -336,6 +338,7 @@ If a source fails (network error, API down), its timestamp is **not** updated �
 ## Architecture
 
 ```
+run_digest.py           # stdlib-only wrapper: shows error popup on any failure
 digest/
   main.py               # CLI entry point
   config.py             # YAML configuration loader
@@ -356,7 +359,7 @@ digest/
   auth/
     atlassian.py        # Jira/Confluence auth
     microsoft.py        # M365 device code flow auth
-setup.bat               # Task Scheduler registration script
+schedule-digest.bat     # Task Scheduler registration script
 config.yaml.example     # Configuration template
 ```
 
