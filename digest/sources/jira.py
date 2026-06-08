@@ -18,6 +18,35 @@ def _load_field_ignore() -> set:
 
 _IGNORED_FIELDS = _load_field_ignore()
 
+_JIRA_KEY_RE = re.compile(r'\b([A-Z][A-Z0-9]+-\d+)\b')
+
+
+def _fetch_issue_summary(config: AtlassianConfig, auth_header: str, key: str, cache: dict) -> str | None:
+    if key in cache:
+        return cache[key]
+    try:
+        resp = requests.get(
+            f"{config.url}/rest/api/3/issue/{key}",
+            headers={"Authorization": auth_header, "Accept": "application/json"},
+            params={"fields": "summary"},
+            timeout=10,
+        )
+        if resp.ok:
+            cache[key] = resp.json()["fields"]["summary"]
+            return cache[key]
+    except Exception:
+        pass
+    cache[key] = None
+    return None
+
+
+def _enrich_keys(value: str, config: AtlassianConfig, auth_header: str, cache: dict) -> str:
+    def replace(m):
+        summary = _fetch_issue_summary(config, auth_header, m.group(1), cache)
+        return f"{m.group(1)} ({summary})" if summary else m.group(1)
+    return _JIRA_KEY_RE.sub(replace, value)
+
+
 
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
     since_str = since.astimezone().strftime("%Y-%m-%d %H:%M")
@@ -117,13 +146,14 @@ def _fetch_watched(
 
     since_utc = since.astimezone(timezone.utc)
     items: List[SourceItem] = []
+    summary_cache: dict = {}
 
     for issue in issues:
         key = issue["key"]
         title = f"{key}: {issue['fields']['summary']}"
         url = f"{config.url}/browse/{key}"
         issue["changelog"] = {"histories": _fetch_issue_changelog(config, auth_header, key)}
-        candidates = _collect_candidates(issue, since_utc, account_id, title, url)
+        candidates = _collect_candidates(issue, since_utc, account_id, title, url, config, auth_header, summary_cache)
         items.extend(_deduplicate(candidates))
 
     return items
@@ -135,6 +165,9 @@ def _collect_candidates(
     account_id: str,
     title: str,
     url: str,
+    config: AtlassianConfig,
+    auth_header: str,
+    summary_cache: dict,
 ) -> List[SourceItem]:
     """Collect all candidate SourceItems from comments, description changes, and field changes."""
     candidates: List[SourceItem] = []
@@ -220,14 +253,20 @@ def _collect_candidates(
         if net_changes:
             latest_ts = max(c["ts"] for c in net_changes)
             latest_author = next(c["author"] for c in net_changes if c["ts"] == latest_ts)
-            content = "; ".join(f"{c['field']}: {c['from']} → {c['to']}" for c in net_changes)
+            enriched = [
+                {**c,
+                 "from": _enrich_keys(c["from"], config, auth_header, summary_cache),
+                 "to": _enrich_keys(c["to"], config, auth_header, summary_cache)}
+                for c in net_changes
+            ]
+            content = "; ".join(f"{c['field']}: {c['from']} → {c['to']}" for c in enriched)
             candidates.append(SourceItem(
                 source="jira", kind="field_change",
                 title=title, url=url,
                 content=content,
                 author=latest_author,
                 timestamp=latest_ts,
-                metadata={"changes": net_changes},
+                metadata={"changes": enriched},
             ))
 
     return candidates

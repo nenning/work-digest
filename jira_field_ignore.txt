@@ -1,3 +1,4 @@
 # Jira fields to suppress from the field-change digest section.
 # One field name per line; case-insensitive; # lines and blank lines ignored.
 Task mode
+Rank
