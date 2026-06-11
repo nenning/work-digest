@@ -47,6 +47,15 @@ class EmailConfig:
 
 
 @dataclass
+class SmtpConfig:
+    host: str
+    username: str
+    port: int = 587
+    use_tls: bool = True
+    sender: Optional[str] = None
+
+
+@dataclass
 class MgmtSummaryConfig:
     jira_jql: str                            # base JQL that defines the team's tickets
     jira_board_id: Optional[int] = None      # board ID required for --sprint lookup
@@ -65,6 +74,19 @@ class Config:
     data_dir: Path
     language: str = "de"  # ISO 639-1 code; used for LLM output language
     mgmt_summary: Optional[MgmtSummaryConfig] = None
+    smtp: Optional[SmtpConfig] = None
+
+
+def _load_smtp(raw: Optional[dict]) -> Optional[SmtpConfig]:
+    if not raw:
+        return None
+    return SmtpConfig(
+        host=raw["host"],
+        username=raw["username"],
+        port=int(raw.get("port", 587)),
+        use_tls=bool(raw.get("use_tls", True)),
+        sender=raw.get("sender") or None,
+    )
 
 
 def _load_mgmt_summary(raw: Optional[dict]) -> Optional[MgmtSummaryConfig]:
@@ -134,4 +156,5 @@ def load_config(path: Path) -> Config:
         data_dir=Path(raw.get("data_dir", "~/.digest")).expanduser(),
         language=raw.get("language", "de"),
         mgmt_summary=_load_mgmt_summary(raw.get("mgmt_summary")),
+        smtp=_load_smtp(raw.get("smtp")),
     )

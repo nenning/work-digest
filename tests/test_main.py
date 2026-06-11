@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from digest.main import parse_since
+from digest.config import SmtpConfig
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ def test_parse_since_iso():
 # Shared helpers for main() integration tests
 # ---------------------------------------------------------------------------
 
-def _make_config(tmp_path: Path):
+def _make_config(tmp_path: Path, smtp: bool = False):
     """Return a minimal Config-like mock."""
     cfg = MagicMock()
     cfg.data_dir = tmp_path
@@ -48,6 +49,8 @@ def _make_config(tmp_path: Path):
     cfg.llm.model = "gpt-4o-mini"
     cfg.llm.endpoint = None
     cfg.email.subject_prefix = "[Digest]"
+    cfg.email.recipient = "user@example.com"
+    cfg.smtp = SmtpConfig(host="smtp.example.com", username="user@example.com") if smtp else None
     return cfg
 
 
@@ -60,7 +63,7 @@ def test_main_nothing_new(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["main.py"])
 
     with (
-        patch("digest.main.load_config", return_value=_make_config(tmp_path)),
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
         patch("digest.main.load_state", return_value={}),
         patch("digest.main.get_auth_header", return_value="Basic xxx"),
         patch("digest.main.get_token", return_value="tok"),
@@ -80,8 +83,8 @@ def test_main_nothing_new(tmp_path, capsys, monkeypatch):
 # test_main_dry_run
 # ---------------------------------------------------------------------------
 
-def test_main_dry_run(tmp_path, monkeypatch):
-    """With --dry-run and one item, send_digest is called with dry_run=True."""
+def test_main_dry_run_smtp(tmp_path, monkeypatch):
+    """With --dry-run and smtp config, send_via_smtp is called with dry_run=True."""
     monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
 
     ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
@@ -110,20 +113,88 @@ def test_main_dry_run(tmp_path, monkeypatch):
     mock_send = MagicMock(return_value=True)
 
     with (
-        patch("digest.main.load_config", return_value=_make_config(tmp_path)),
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
         patch("digest.main.load_state", return_value={}),
         patch("digest.main.get_auth_header", return_value="Basic xxx"),
         patch("digest.main.get_token", return_value="tok"),
         patch("digest.main.jira.fetch", return_value=[fake_source_item]),
         patch("digest.main.summarize_items", return_value=[fake_summarized]),
-        patch("digest.main.get_recipient", return_value="user@example.com"),
-        patch("digest.main.send_digest", mock_send),
+        patch("digest.main.send_via_smtp", mock_send),
     ):
         from digest.main import main
         main()
 
     mock_send.assert_called_once()
     assert mock_send.call_args.kwargs.get("dry_run") is True
+
+
+def test_main_dry_run_com(tmp_path, monkeypatch):
+    """With --dry-run and no smtp config on Windows, send_via_com is called."""
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
+
+    ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+    from digest.models import SourceItem, SummarizedItem
+
+    fake_source_item = SourceItem(
+        source="jira", kind="assignment", title="PROJ-1",
+        url="https://example.atlassian.net/browse/PROJ-1",
+        content="x", author="Alice", timestamp=ts,
+    )
+    fake_summarized = SummarizedItem(
+        source="jira", kind="assignment", title="PROJ-1",
+        url="https://example.atlassian.net/browse/PROJ-1",
+        summary="done", author="Alice", timestamp=ts,
+    )
+
+    mock_send = MagicMock(return_value=True)
+
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=False)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.jira.fetch", return_value=[fake_source_item]),
+        patch("digest.main.summarize_items", return_value=[fake_summarized]),
+        patch("digest.main.send_via_com", mock_send),
+        patch("digest.main.sys.platform", "win32"),
+    ):
+        from digest.main import main
+        main()
+
+    mock_send.assert_called_once()
+    assert mock_send.call_args.kwargs.get("dry_run") is True
+
+
+def test_main_non_windows_no_smtp_raises(tmp_path, monkeypatch):
+    """On non-Windows without smtp config, main() raises a clear error."""
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
+
+    ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+    from digest.models import SourceItem, SummarizedItem
+
+    fake_source_item = SourceItem(
+        source="jira", kind="assignment", title="PROJ-1",
+        url="https://example.atlassian.net/browse/PROJ-1",
+        content="x", author="Alice", timestamp=ts,
+    )
+    fake_summarized = SummarizedItem(
+        source="jira", kind="assignment", title="PROJ-1",
+        url="https://example.atlassian.net/browse/PROJ-1",
+        summary="done", author="Alice", timestamp=ts,
+    )
+
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=False)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.jira.fetch", return_value=[fake_source_item]),
+        patch("digest.main.summarize_items", return_value=[fake_summarized]),
+        patch("digest.main.sys.platform", "linux"),
+        pytest.raises(RuntimeError, match="smtp"),
+    ):
+        from digest.main import main
+        main()
 
 
 # ---------------------------------------------------------------------------
@@ -168,23 +239,34 @@ def test_parse_since_negative_hours_raises():
 
 
 # ---------------------------------------------------------------------------
-# get_recipient error handling
+# --setup-smtp-auth
 # ---------------------------------------------------------------------------
 
-def test_get_recipient_raises_when_fields_missing():
-    import requests as req_mod
-    from digest.main import get_recipient
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.return_value = None
-    mock_resp.json.return_value = {}  # neither mail nor userPrincipalName
-    with patch("digest.main.requests.get", return_value=mock_resp):
-        with pytest.raises(RuntimeError, match="recipient"):
-            get_recipient("tok")
+def test_setup_smtp_auth_stores_password(tmp_path, capsys, monkeypatch):
+    """--setup-smtp-auth prompts for password and stores it in keyring."""
+    monkeypatch.setattr(sys, "argv", ["main.py", "--setup-smtp-auth"])
+
+    cfg = _make_config(tmp_path, smtp=True)
+
+    with (
+        patch("digest.main.load_config", return_value=cfg),
+        patch("digest.main.getpass.getpass", return_value="my-secret"),
+        patch("digest.main.keyring.set_password") as mock_set,
+    ):
+        from digest.main import main
+        main()
+
+    mock_set.assert_called_once_with("digest-smtp", "user@example.com", "my-secret")
+    assert "success" in capsys.readouterr().out.lower()
 
 
-def test_get_recipient_raises_on_network_error():
-    import requests as req_mod
-    from digest.main import get_recipient
-    with patch("digest.main.requests.get", side_effect=req_mod.ConnectionError("timeout")):
-        with pytest.raises(RuntimeError, match="Graph"):
-            get_recipient("tok")
+def test_setup_smtp_auth_requires_smtp_config(tmp_path, monkeypatch):
+    """--setup-smtp-auth fails clearly when no smtp block is configured."""
+    monkeypatch.setattr(sys, "argv", ["main.py", "--setup-smtp-auth"])
+
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=False)),
+        pytest.raises(RuntimeError, match="smtp"),
+    ):
+        from digest.main import main
+        main()

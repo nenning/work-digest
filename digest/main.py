@@ -13,17 +13,20 @@ if _root not in sys.path:
 
 import argparse
 import concurrent.futures
+import getpass
+import keyring
 import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-import requests
-
 from digest.auth.atlassian import get_auth_header
 from digest.auth.microsoft import get_token
 from digest.config import load_config
-from digest.email_sender import send_digest, send_mgmt_summary, send_mgmt_summary_via_com, send_via_com
+from digest.email_sender import (
+    send_via_smtp, send_via_com,
+    send_mgmt_summary_via_smtp, send_mgmt_summary_via_com,
+)
 from digest.models import SourceItem, SummarizedItem
 from digest.sources import confluence, jira, outlook, teams
 from digest.sources.mgmt_jira import fetch_sprint, fetch_team_tickets
@@ -60,33 +63,6 @@ def parse_since(s: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def get_recipient(token: str) -> str:
-    """Return the current user's email address from the Graph /me endpoint.
-
-    Raises RuntimeError if the address cannot be determined (e.g. guest account,
-    malformed response, or network error). Callers should not proceed without a
-    valid recipient.
-    """
-    try:
-        resp = requests.get(
-            "https://graph.microsoft.com/v1.0/me",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to resolve recipient from Graph /me: {exc}") from exc
-
-    address = data.get("mail") or data.get("userPrincipalName")
-    if not address:
-        raise RuntimeError(
-            "Could not determine recipient email from Graph /me response. "
-            "Neither 'mail' nor 'userPrincipalName' was present."
-        )
-    return address
 
 
 def _print_model_stats(model_stats: dict) -> None:
@@ -126,6 +102,11 @@ def main() -> None:
         "--setup-auth",
         action="store_true",
         help="Authenticate with M365 only and exit",
+    )
+    parser.add_argument(
+        "--setup-smtp-auth",
+        action="store_true",
+        help="Store SMTP password in OS keyring and exit",
     )
     parser.add_argument(
         "--dry-run",
@@ -198,6 +179,17 @@ def main() -> None:
             return
         get_token(config.m365.tenant_id, cache_file, client_id=config.m365.client_id)
         print("M365 authentication successful.")
+        return
+
+    # --setup-smtp-auth: store SMTP password in OS keyring then exit
+    if args.setup_smtp_auth:
+        if config.smtp is None:
+            raise RuntimeError(
+                "No smtp block configured. Add an smtp: block to config.yaml first."
+            )
+        password = getpass.getpass(f"SMTP password for {config.smtp.username}: ")
+        keyring.set_password("digest-smtp", config.smtp.username, password)
+        print("SMTP authentication stored successfully.")
         return
 
     with process_lock(data_dir):
@@ -317,32 +309,32 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
     print()
 
     # --- Deliver ---
-    recipient_override = mgmt_cfg.recipient
-    if config.m365.enabled:
-        recipient = recipient_override or get_recipient(m365_token)
-        if args.dry_run:
-            print("Dry run -- no email sent.")
-        else:
-            print(f"Sending to {recipient}...")
-        send_mgmt_summary(
+    recipient = mgmt_cfg.recipient or config.email.recipient
+    if not recipient:
+        raise RuntimeError(
+            "email.recipient (or mgmt_summary.recipient) must be set in config.yaml"
+        )
+
+    if config.smtp:
+        if not args.dry_run:
+            print(f"Sending via SMTP to {recipient}...")
+        send_mgmt_summary_via_smtp(
             narrative, jira_items, confluence_items,
-            subject, config.email, m365_token, recipient,
+            subject, config.email, config.smtp, recipient,
             dry_run=args.dry_run, time_range=time_range,
         )
-    else:
-        recipient = recipient_override or config.email.recipient
-        if not recipient:
-            raise RuntimeError(
-                "email.recipient (or mgmt_summary.recipient) must be set when m365.enabled is false"
-            )
-        if args.dry_run:
-            print("Dry run - opening Outlook draft...")
-        else:
+    elif sys.platform == "win32":
+        if not args.dry_run:
             print(f"Sending via Outlook COM to {recipient}...")
         send_mgmt_summary_via_com(
             narrative, jira_items, confluence_items,
             subject, config.email, recipient,
             dry_run=args.dry_run, time_range=time_range,
+        )
+    else:
+        raise RuntimeError(
+            "No smtp block configured and COM is Windows-only. "
+            "Add an smtp: block to config.yaml and run --setup-smtp-auth."
         )
 
 
@@ -454,16 +446,30 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
         "model_stats": model_stats,
     }
 
-    if config.m365.enabled:
-        recipient = get_recipient(m365_token)
-        if args.dry_run:
-            print("Dry run -- no email sent.")
-        else:
-            print(f"Sending to {recipient}...")
-        sent = send_digest(
+    recipient = config.email.recipient
+    if not recipient:
+        raise RuntimeError("email.recipient must be set in config.yaml")
+
+    if config.smtp:
+        if not args.dry_run:
+            print(f"Sending via SMTP to {recipient}...")
+        sent = send_via_smtp(
             summarized,
             config.email,
-            m365_token,
+            config.smtp,
+            recipient,
+            dry_run=args.dry_run,
+            now=now_local,
+            notices=notices,
+            time_range=time_range,
+            timing=timing,
+        )
+    elif sys.platform == "win32":
+        if not args.dry_run:
+            print(f"Sending via Outlook COM to {recipient}...")
+        sent = send_via_com(
+            summarized,
+            config.email,
             recipient,
             dry_run=args.dry_run,
             now=now_local,
@@ -472,23 +478,9 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
             timing=timing,
         )
     else:
-        if not config.email.recipient:
-            raise RuntimeError(
-                "email.recipient must be set in config.yaml when m365.enabled is false"
-            )
-        if args.dry_run:
-            print("Dry run -- opening Outlook draft...")
-        else:
-            print(f"Sending via Outlook COM to {config.email.recipient}...")
-        sent = send_via_com(
-            summarized,
-            config.email,
-            config.email.recipient,
-            dry_run=args.dry_run,
-            now=now_local,
-            notices=notices,
-            time_range=time_range,
-            timing=timing,
+        raise RuntimeError(
+            "No smtp block configured and COM is Windows-only. "
+            "Add an smtp: block to config.yaml and run --setup-smtp-auth."
         )
 
     t_del_end = time.monotonic()

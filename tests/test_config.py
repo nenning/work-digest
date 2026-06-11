@@ -101,3 +101,46 @@ def test_empty_file_raises(tmp_path):
 def test_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_config(tmp_path / "nonexistent.yaml")
+
+
+# ---------------------------------------------------------------------------
+# SmtpConfig
+# ---------------------------------------------------------------------------
+
+VALID_YAML_WITH_SMTP = VALID_YAML + """
+smtp:
+  host: smtp.office365.com
+  port: 587
+  username: user@company.com
+  use_tls: true
+  sender: noreply@company.com
+"""
+
+
+def test_smtp_config_loads(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(VALID_YAML_WITH_SMTP)
+    cfg = load_config(cfg_file)
+    assert cfg.smtp is not None
+    assert cfg.smtp.host == "smtp.office365.com"
+    assert cfg.smtp.port == 587
+    assert cfg.smtp.username == "user@company.com"
+    assert cfg.smtp.use_tls is True
+    assert cfg.smtp.sender == "noreply@company.com"
+
+
+def test_smtp_absent_gives_none(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(VALID_YAML)
+    cfg = load_config(cfg_file)
+    assert cfg.smtp is None
+
+
+def test_smtp_defaults(tmp_path):
+    yaml = VALID_YAML + "\nsmtp:\n  host: smtp.example.com\n  username: u@example.com\n"
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml)
+    cfg = load_config(cfg_file)
+    assert cfg.smtp.port == 587
+    assert cfg.smtp.use_tls is True
+    assert cfg.smtp.sender is None

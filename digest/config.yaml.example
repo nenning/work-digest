@@ -8,16 +8,27 @@ atlassian:
   confluence_spaces: [ENG, DOC]
 
 m365:
-  enabled: true    # set to false to skip Teams/Outlook and open a local Outlook draft instead
+  enabled: true    # set to false to skip Teams/Outlook fetching
 
   # tenant_id is optional — omit to use "organizations" authority
   # tenant_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
   # client_id: required if your tenant blocks the Azure CLI app ID (AADSTS65002 error).
   # Register your own Azure AD app (Public client, delegated permissions:
-  # Mail.Read, Mail.Send, Chat.Read, ChannelMessage.Read.All, User.Read)
+  # Mail.Read, Chat.Read, ChannelMessage.Read.All, User.Read)
   # and paste its Application (client) ID here.
   # client_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Email send path: smtp block present → SMTP (any platform)
+#                  smtp absent + Windows → Outlook COM (opens draft or sends via Outlook app)
+#                  smtp absent + non-Windows → error (add smtp block)
+# Run once to store the password: python digest/main.py --setup-smtp-auth
+# smtp:
+#   host: smtp.office365.com
+#   port: 587                  # default; 465 for SSL-only servers
+#   username: you@company.com
+#   # use_tls: true            # default true (STARTTLS on port 587)
+#   # sender: you@company.com  # default: same as username
 
 llm:
   provider: openai              # openai | anthropic | azure_openai
@@ -33,7 +44,7 @@ schedule:
 
 email:
   subject_prefix: "[Digest]"
-  recipient: you@company.com   # required when m365.enabled is false (COM send path)
+  recipient: you@company.com   # required for all send paths (SMTP and COM)
 
 language: de   # ISO 639-1 output language for LLM summaries (de | en | fr | es | it | ...)
 

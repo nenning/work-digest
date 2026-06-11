@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
-import requests
 
-from digest.config import EmailConfig
+from digest.config import EmailConfig, SmtpConfig
 from digest.email_sender import (
-    TEMPLATES_DIR, _render_html, _safe_url, send_digest
+    TEMPLATES_DIR, _render_html, _safe_url,
+    send_via_smtp, send_mgmt_summary_via_smtp,
 )
-from digest.models import SummarizedItem
+from digest.models import SourceItem, SummarizedItem
 
 
 # ---------------------------------------------------------------------------
@@ -41,98 +41,190 @@ def _default_config() -> EmailConfig:
     return EmailConfig(subject_prefix="[Digest]")
 
 
+def _default_smtp() -> SmtpConfig:
+    return SmtpConfig(host="smtp.example.com", username="user@example.com")
+
+
 _FIXED_NOW = datetime(2026, 4, 9, 14, 30, 0, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
-# Test 1: returns False when no items
+# send_via_smtp: returns False when no items
 # ---------------------------------------------------------------------------
 
-def test_returns_false_when_no_items():
-    result = send_digest(
+def test_smtp_returns_false_when_no_items():
+    result = send_via_smtp(
         items=[],
         config=_default_config(),
-        m365_token="tok",
+        smtp_cfg=_default_smtp(),
         recipient="user@example.com",
     )
     assert result is False
 
 
 # ---------------------------------------------------------------------------
-# Test 2: dry_run does not call Graph API; prints "DRY RUN" to stdout
+# send_via_smtp: dry_run prints "DRY RUN", does not connect to SMTP
 # ---------------------------------------------------------------------------
 
-def test_dry_run_does_not_call_graph(capsys):
+def test_smtp_dry_run_does_not_connect(capsys):
     item = _make_item()
-    with patch("digest.email_sender.requests.post") as mock_post:
-        result = send_digest(
+    with patch("smtplib.SMTP") as mock_smtp_cls:
+        result = send_via_smtp(
             items=[item],
             config=_default_config(),
-            m365_token="tok",
+            smtp_cfg=_default_smtp(),
             recipient="user@example.com",
             dry_run=True,
             now=_FIXED_NOW,
         )
-
     assert result is True
-    mock_post.assert_not_called()
-
-    captured = capsys.readouterr()
-    assert "DRY RUN" in captured.out
+    mock_smtp_cls.assert_not_called()
+    assert "DRY RUN" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
-# Test 3: sends via Graph API with correct URL and Authorization header
+# send_via_smtp: connects, authenticates, and sends
 # ---------------------------------------------------------------------------
 
-def test_sends_via_graph_api():
+def test_smtp_sends_email():
     item = _make_item()
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.return_value = None
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
 
-    with patch("digest.email_sender.requests.post", return_value=mock_resp) as mock_post:
-        result = send_digest(
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        result = send_via_smtp(
             items=[item],
             config=_default_config(),
-            m365_token="my-token",
+            smtp_cfg=_default_smtp(),
             recipient="user@example.com",
-            dry_run=False,
             now=_FIXED_NOW,
         )
 
     assert result is True
-    mock_post.assert_called_once()
-
-    call_kwargs = mock_post.call_args
-
-    # Positional arg 0 is the URL
-    url = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("url", "")
-    assert "sendMail" in url
-
-    # Headers contain Authorization
-    headers = call_kwargs.kwargs.get("headers", {})
-    assert "Authorization" in headers
-    assert "my-token" in headers["Authorization"]
+    mock_smtp.starttls.assert_called_once()
+    mock_smtp.login.assert_called_once_with("user@example.com", "secret")
+    mock_smtp.sendmail.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# Test 4: subject contains prefix and correct item count
+# send_via_smtp: missing keyring password raises RuntimeError
 # ---------------------------------------------------------------------------
 
-def test_subject_contains_prefix_and_count(capsys):
+def test_smtp_missing_password_raises():
     item = _make_item()
-    send_digest(
+    with patch("keyring.get_password", return_value=None):
+        with pytest.raises(RuntimeError, match="setup-smtp-auth"):
+            send_via_smtp(
+                items=[item],
+                config=_default_config(),
+                smtp_cfg=_default_smtp(),
+                recipient="user@example.com",
+            )
+
+
+# ---------------------------------------------------------------------------
+# send_via_smtp: uses sender from smtp_cfg when set
+# ---------------------------------------------------------------------------
+
+def test_smtp_uses_configured_sender():
+    item = _make_item()
+    smtp = SmtpConfig(host="smtp.example.com", username="user@example.com", sender="noreply@example.com")
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        send_via_smtp(
+            items=[item],
+            config=_default_config(),
+            smtp_cfg=smtp,
+            recipient="user@example.com",
+            now=_FIXED_NOW,
+        )
+
+    sendmail_call = mock_smtp.sendmail.call_args
+    assert sendmail_call.args[0] == "noreply@example.com"
+
+
+# ---------------------------------------------------------------------------
+# send_via_smtp: subject contains prefix and item count
+# ---------------------------------------------------------------------------
+
+def test_smtp_subject_contains_prefix_and_count(capsys):
+    item = _make_item()
+    send_via_smtp(
         items=[item],
         config=_default_config(),
-        m365_token="tok",
+        smtp_cfg=_default_smtp(),
         recipient="user@example.com",
         dry_run=True,
         now=_FIXED_NOW,
     )
+    out = capsys.readouterr().out
+    assert "[Digest]" in out
+    assert "1 item" in out
 
-    captured = capsys.readouterr()
-    assert "[Digest]" in captured.out
-    assert "1 item" in captured.out
+
+# ---------------------------------------------------------------------------
+# send_mgmt_summary_via_smtp: dry_run prints narrative
+# ---------------------------------------------------------------------------
+
+def _make_source_item(kind: str = "ticket_done") -> SourceItem:
+    return SourceItem(
+        source="jira",
+        kind=kind,
+        title="PROJ-1",
+        url="https://example.com/PROJ-1",
+        content="done",
+        author="Alice",
+        timestamp=_FIXED_NOW,
+    )
+
+
+def test_smtp_mgmt_summary_dry_run(capsys):
+    with patch("smtplib.SMTP") as mock_smtp_cls:
+        result = send_mgmt_summary_via_smtp(
+            narrative="Team did great work.",
+            jira_items=[_make_source_item()],
+            confluence_items=[],
+            subject="[Team Summary]",
+            config=_default_config(),
+            smtp_cfg=_default_smtp(),
+            recipient="user@example.com",
+            dry_run=True,
+        )
+    assert result is True
+    mock_smtp_cls.assert_not_called()
+    assert "Team did great work." in capsys.readouterr().out
+
+
+def test_smtp_mgmt_summary_sends():
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        result = send_mgmt_summary_via_smtp(
+            narrative="Team did great work.",
+            jira_items=[_make_source_item()],
+            confluence_items=[],
+            subject="[Team Summary]",
+            config=_default_config(),
+            smtp_cfg=_default_smtp(),
+            recipient="user@example.com",
+        )
+    assert result is True
+    mock_smtp.sendmail.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -168,17 +260,20 @@ def test_safe_url_blocks_data_uri():
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Graph API error is caught, returns False
+# SMTP error is caught, returns False
 # ---------------------------------------------------------------------------
 
-def test_graph_error_returns_false():
+def test_smtp_error_returns_false():
+    import smtplib
     item = _make_item()
-    with patch("digest.email_sender.requests.post") as mock_post:
-        mock_post.side_effect = requests.exceptions.ConnectionError("timeout")
-        result = send_digest(
+    with (
+        patch("smtplib.SMTP", side_effect=smtplib.SMTPException("connect failed")),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        result = send_via_smtp(
             items=[item],
             config=_default_config(),
-            m365_token="tok",
+            smtp_cfg=_default_smtp(),
             recipient="user@example.com",
             now=_FIXED_NOW,
         )
@@ -186,19 +281,18 @@ def test_graph_error_returns_false():
 
 
 # ---------------------------------------------------------------------------
-# Test 8: items with unknown source are excluded from sections
+# items with unknown source are excluded from sections
 # ---------------------------------------------------------------------------
 
 def test_unknown_source_excluded():
-    unknown_item = _make_item(source="slack")  # not in SOURCE_ORDER
+    unknown_item = _make_item(source="slack")
     jira_item = _make_item(source="jira")
-    result = send_digest(
+    result = send_via_smtp(
         items=[unknown_item, jira_item],
         config=_default_config(),
-        m365_token="tok",
+        smtp_cfg=_default_smtp(),
         recipient="user@example.com",
         dry_run=True,
         now=_FIXED_NOW,
     )
-    # slack item dropped, jira item present → still sends
     assert result is True

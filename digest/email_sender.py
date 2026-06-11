@@ -1,16 +1,19 @@
-"""Email sender: renders the HTML digest template and sends via Graph API."""
+"""Email sender: renders the HTML digest template and sends via SMTP or Outlook COM."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import smtplib
+from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-import requests
+import keyring
 from jinja2 import Environment, FileSystemLoader
 
-from digest.config import EmailConfig
+from digest.config import EmailConfig, SmtpConfig
 from digest.models import SourceItem, SummarizedItem
 
 log = logging.getLogger(__name__)
@@ -68,7 +71,6 @@ def _kind_to_group(source: str, kind: str) -> str:
     return "updates"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-_GRAPH_SEND_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
 _ALLOWED_URL_SCHEMES = {"http", "https"}
 
 # Fail fast at import time if the template files are missing (deployment error).
@@ -168,10 +170,38 @@ def _render_html(
     )
 
 
-def send_digest(
+def _smtp_send(smtp_cfg: SmtpConfig, recipient: str, subject: str, html_body: str) -> bool:
+    password = keyring.get_password("digest-smtp", smtp_cfg.username)
+    if password is None:
+        raise RuntimeError(
+            f"No SMTP password found in keyring for {smtp_cfg.username!r}. "
+            "Run: python digest/main.py --setup-smtp-auth"
+        )
+
+    sender = smtp_cfg.sender or smtp_cfg.username
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = recipient
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        with smtplib.SMTP(smtp_cfg.host, smtp_cfg.port) as server:
+            if smtp_cfg.use_tls:
+                server.starttls()
+            server.login(smtp_cfg.username, password)
+            server.sendmail(sender, recipient, msg.as_string())
+    except Exception as exc:
+        log.error("Failed to send email via SMTP: %s", exc)
+        return False
+
+    return True
+
+
+def send_via_smtp(
     items: List[SummarizedItem],
     config: EmailConfig,
-    m365_token: str,
+    smtp_cfg: SmtpConfig,
     recipient: str,
     dry_run: bool = False,
     now: Optional[datetime] = None,
@@ -179,16 +209,10 @@ def send_digest(
     time_range: Optional[str] = None,
     timing: Optional[dict] = None,
 ) -> bool:
-    """Render and send (or dry-run) the digest email.
-
-    Returns True on success, False when there are no items to send or when
-    the Graph API call fails (failure is logged but not re-raised so that
-    unattended scheduled runs do not crash).
-    """
+    """Render and send (or dry-run) the digest email via SMTP."""
     if not items:
         return False
 
-    # Group by kind category; filter out unknown sources to prevent unexpected CSS class names.
     sections: Dict[str, List[SummarizedItem]] = {}
     for item in items:
         if item.source not in VALID_SOURCES:
@@ -223,33 +247,30 @@ def send_digest(
         print()
         return True
 
-    try:
-        resp = requests.post(
-            _GRAPH_SEND_URL,
-            headers={
-                "Authorization": f"Bearer {m365_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "message": {
-                    "subject": subject,
-                    "body": {
-                        "contentType": "HTML",
-                        "content": html_body,
-                    },
-                    "toRecipients": [
-                        {"emailAddress": {"address": recipient}}
-                    ],
-                }
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except requests.exceptions.RequestException as exc:
-        log.error("Failed to send digest email: %s", exc)
-        return False
+    return _smtp_send(smtp_cfg, recipient, subject, html_body)
 
-    return True
+
+def send_mgmt_summary_via_smtp(
+    narrative: str,
+    jira_items: List[SourceItem],
+    confluence_items: List[SourceItem],
+    subject: str,
+    config: EmailConfig,
+    smtp_cfg: SmtpConfig,
+    recipient: str,
+    dry_run: bool = False,
+    time_range: Optional[str] = None,
+    notices: Optional[List[str]] = None,
+) -> bool:
+    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices)
+
+    if dry_run:
+        print(f"\nDRY RUN — {subject}\n{'─' * 60}")
+        print(narrative)
+        print(f"\n[{len(jira_items)} Jira tickets, {len(confluence_items)} Confluence pages]")
+        return True
+
+    return _smtp_send(smtp_cfg, recipient, subject, html_body)
 
 
 def send_via_com(
@@ -351,50 +372,6 @@ def _render_mgmt_html(
         todo_tickets=todo_tickets,
         confluence_items=confluence_items,
     )
-
-
-def send_mgmt_summary(
-    narrative: str,
-    jira_items: List[SourceItem],
-    confluence_items: List[SourceItem],
-    subject: str,
-    config: EmailConfig,
-    m365_token: str,
-    recipient: str,
-    dry_run: bool = False,
-    time_range: Optional[str] = None,
-    notices: Optional[List[str]] = None,
-) -> bool:
-    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices)
-
-    if dry_run:
-        print(f"\nDRY RUN — {subject}\n{'─' * 60}")
-        print(narrative)
-        print(f"\n[{len(jira_items)} Jira tickets, {len(confluence_items)} Confluence pages]")
-        return True
-
-    try:
-        resp = requests.post(
-            _GRAPH_SEND_URL,
-            headers={
-                "Authorization": f"Bearer {m365_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "message": {
-                    "subject": subject,
-                    "body": {"contentType": "HTML", "content": html_body},
-                    "toRecipients": [{"emailAddress": {"address": recipient}}],
-                }
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except requests.exceptions.RequestException as exc:
-        log.error("Failed to send management summary email: %s", exc)
-        return False
-
-    return True
 
 
 def send_mgmt_summary_via_com(
