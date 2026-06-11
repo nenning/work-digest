@@ -1,6 +1,7 @@
 """Email sender: renders the HTML digest template and sends via SMTP or Outlook COM."""
 from __future__ import annotations
 
+import base64
 import logging
 import smtplib
 from datetime import datetime
@@ -170,26 +171,48 @@ def _render_html(
     )
 
 
-def _smtp_send(smtp_cfg: SmtpConfig, recipient: str, subject: str, html_body: str) -> bool:
-    password = keyring.get_password("digest-smtp", smtp_cfg.username)
-    if password is None:
-        raise RuntimeError(
-            f"No SMTP password found in keyring for {smtp_cfg.username!r}. "
-            "Run: python digest/main.py --setup-smtp-auth"
-        )
-
+def _smtp_send(
+    smtp_cfg: SmtpConfig,
+    recipient: str,
+    subject: str,
+    html_body: str,
+    m365_token: Optional[str] = None,
+) -> bool:
     sender = smtp_cfg.sender or smtp_cfg.username
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = recipient
     msg.attach(MIMEText(html_body, "html"))
 
+    if smtp_cfg.use_oauth2:
+        if not m365_token:
+            raise RuntimeError(
+                "smtp.use_oauth2 requires an M365 token. "
+                "Run: python digest/main.py --setup-auth"
+            )
+        xoauth2 = base64.b64encode(
+            f"user={smtp_cfg.username}\x01auth=Bearer {m365_token}\x01\x01".encode()
+        ).decode()
+    else:
+        password = keyring.get_password("digest-smtp", smtp_cfg.username)
+        if password is None:
+            raise RuntimeError(
+                f"No SMTP password found in keyring for {smtp_cfg.username!r}. "
+                "Run: python digest/main.py --setup-smtp-auth"
+            )
+
     try:
         with smtplib.SMTP(smtp_cfg.host, smtp_cfg.port) as server:
             if smtp_cfg.use_tls:
                 server.starttls()
-            server.login(smtp_cfg.username, password)
+            if smtp_cfg.use_oauth2:
+                code, resp = server.docmd("AUTH", "XOAUTH2 " + xoauth2)
+                if code != 235:
+                    raise smtplib.SMTPAuthenticationError(code, resp)
+            else:
+                server.login(smtp_cfg.username, password)
             server.sendmail(sender, recipient, msg.as_string())
     except Exception as exc:
         log.error("Failed to send email via SMTP: %s", exc)
@@ -208,8 +231,13 @@ def send_via_smtp(
     notices: Optional[List[str]] = None,
     time_range: Optional[str] = None,
     timing: Optional[dict] = None,
+    m365_token: Optional[str] = None,
 ) -> bool:
-    """Render and send (or dry-run) the digest email via SMTP."""
+    """Render and send the digest email via SMTP.
+
+    dry_run=True sends to the configured sender (self-preview) rather than the
+    real recipient, so the HTML email lands in your own inbox for inspection.
+    """
     if not items:
         return False
 
@@ -230,24 +258,11 @@ def send_via_smtp(
     html_body = _render_html(sections, subject, notices, time_range, timing)
 
     if dry_run:
-        print(f"\nDRY RUN — {subject}\n{'─' * 60}")
-        if notices:
-            print("\n⚠️  NOTICES")
-            for n in notices:
-                print(f"  {n}")
-        for grp in GROUP_ORDER:
-            grp_items = sections.get(grp, [])
-            if not grp_items:
-                continue
-            print(f"\n{GROUP_ICONS[grp]} {GROUP_LABELS[grp].upper()}")
-            for it in grp_items:
-                src_label = SOURCE_LABELS.get(it.source, it.source)
-                print(f"  [{src_label}] {it.title}")
-                print(f"  {it.summary}")
-        print()
-        return True
+        preview_to = smtp_cfg.sender or smtp_cfg.username
+        print(f"\nDRY RUN — sending preview to {preview_to}\n{'─' * 60}")
+        return _smtp_send(smtp_cfg, preview_to, subject, html_body, m365_token)
 
-    return _smtp_send(smtp_cfg, recipient, subject, html_body)
+    return _smtp_send(smtp_cfg, recipient, subject, html_body, m365_token)
 
 
 def send_mgmt_summary_via_smtp(
@@ -261,16 +276,18 @@ def send_mgmt_summary_via_smtp(
     dry_run: bool = False,
     time_range: Optional[str] = None,
     notices: Optional[List[str]] = None,
+    m365_token: Optional[str] = None,
 ) -> bool:
     html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices)
 
     if dry_run:
-        print(f"\nDRY RUN — {subject}\n{'─' * 60}")
+        preview_to = smtp_cfg.sender or smtp_cfg.username
+        print(f"\nDRY RUN — sending preview to {preview_to}\n{'─' * 60}")
         print(narrative)
         print(f"\n[{len(jira_items)} Jira tickets, {len(confluence_items)} Confluence pages]")
-        return True
+        return _smtp_send(smtp_cfg, preview_to, subject, html_body, m365_token)
 
-    return _smtp_send(smtp_cfg, recipient, subject, html_body)
+    return _smtp_send(smtp_cfg, recipient, subject, html_body, m365_token)
 
 
 def send_via_com(

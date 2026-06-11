@@ -66,19 +66,30 @@ def test_smtp_returns_false_when_no_items():
 # send_via_smtp: dry_run prints "DRY RUN", does not connect to SMTP
 # ---------------------------------------------------------------------------
 
-def test_smtp_dry_run_does_not_connect(capsys):
+def test_smtp_dry_run_sends_preview_to_sender(capsys):
+    """dry_run sends to smtp sender (self-preview), not to the configured recipient."""
     item = _make_item()
-    with patch("smtplib.SMTP") as mock_smtp_cls:
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    smtp_cfg = SmtpConfig(host="smtp.example.com", username="sender@example.com")
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
         result = send_via_smtp(
             items=[item],
             config=_default_config(),
-            smtp_cfg=_default_smtp(),
-            recipient="user@example.com",
+            smtp_cfg=smtp_cfg,
+            recipient="boss@example.com",
             dry_run=True,
             now=_FIXED_NOW,
         )
+
     assert result is True
-    mock_smtp_cls.assert_not_called()
+    mock_smtp.sendmail.assert_called_once()
+    assert mock_smtp.sendmail.call_args.args[1] == "sender@example.com"
     assert "DRY RUN" in capsys.readouterr().out
 
 
@@ -157,19 +168,31 @@ def test_smtp_uses_configured_sender():
 # send_via_smtp: subject contains prefix and item count
 # ---------------------------------------------------------------------------
 
-def test_smtp_subject_contains_prefix_and_count(capsys):
+def test_smtp_subject_contains_prefix_and_count():
+    import email as email_mod
+    from email.header import decode_header as dh
     item = _make_item()
-    send_via_smtp(
-        items=[item],
-        config=_default_config(),
-        smtp_cfg=_default_smtp(),
-        recipient="user@example.com",
-        dry_run=True,
-        now=_FIXED_NOW,
-    )
-    out = capsys.readouterr().out
-    assert "[Digest]" in out
-    assert "1 item" in out
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        send_via_smtp(
+            items=[item],
+            config=_default_config(),
+            smtp_cfg=_default_smtp(),
+            recipient="user@example.com",
+            dry_run=True,
+            now=_FIXED_NOW,
+        )
+    sent_msg_str = mock_smtp.sendmail.call_args.args[2]
+    parsed = email_mod.message_from_string(sent_msg_str)
+    raw_subject, enc = dh(parsed["Subject"])[0]
+    subject = raw_subject.decode(enc or "utf-8") if isinstance(raw_subject, bytes) else raw_subject
+    assert "[Digest]" in subject
+    assert "1 item" in subject
 
 
 # ---------------------------------------------------------------------------
@@ -188,20 +211,29 @@ def _make_source_item(kind: str = "ticket_done") -> SourceItem:
     )
 
 
-def test_smtp_mgmt_summary_dry_run(capsys):
-    with patch("smtplib.SMTP") as mock_smtp_cls:
+def test_smtp_mgmt_summary_dry_run_sends_preview_to_sender(capsys):
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    smtp_cfg = SmtpConfig(host="smtp.example.com", username="sender@example.com")
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
         result = send_mgmt_summary_via_smtp(
             narrative="Team did great work.",
             jira_items=[_make_source_item()],
             confluence_items=[],
             subject="[Team Summary]",
             config=_default_config(),
-            smtp_cfg=_default_smtp(),
-            recipient="user@example.com",
+            smtp_cfg=smtp_cfg,
+            recipient="boss@example.com",
             dry_run=True,
         )
     assert result is True
-    mock_smtp_cls.assert_not_called()
+    mock_smtp.sendmail.assert_called_once()
+    assert mock_smtp.sendmail.call_args.args[1] == "sender@example.com"
     assert "Team did great work." in capsys.readouterr().out
 
 
@@ -263,6 +295,98 @@ def test_safe_url_blocks_data_uri():
 # SMTP error is caught, returns False
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# XOAUTH2 path
+# ---------------------------------------------------------------------------
+
+def _oauth2_smtp() -> SmtpConfig:
+    return SmtpConfig(host="smtp.office365.com", username="user@example.com", use_oauth2=True)
+
+
+def test_smtp_oauth2_uses_xoauth2_not_login():
+    item = _make_item()
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    mock_smtp.docmd.return_value = (235, b"OK")
+
+    with patch("smtplib.SMTP", return_value=mock_smtp):
+        result = send_via_smtp(
+            items=[item],
+            config=_default_config(),
+            smtp_cfg=_oauth2_smtp(),
+            recipient="user@example.com",
+            m365_token="fake-token",
+            now=_FIXED_NOW,
+        )
+
+    assert result is True
+    mock_smtp.login.assert_not_called()
+    docmd_call = mock_smtp.docmd.call_args
+    assert docmd_call.args[0] == "AUTH"
+    assert "XOAUTH2" in docmd_call.args[1]
+
+
+def test_smtp_oauth2_xoauth2_string_contains_token():
+    import base64
+    item = _make_item()
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    mock_smtp.docmd.return_value = (235, b"OK")
+
+    with patch("smtplib.SMTP", return_value=mock_smtp):
+        send_via_smtp(
+            items=[item],
+            config=_default_config(),
+            smtp_cfg=_oauth2_smtp(),
+            recipient="user@example.com",
+            m365_token="my-access-token",
+            now=_FIXED_NOW,
+        )
+
+    raw_arg = mock_smtp.docmd.call_args.args[1]
+    b64_part = raw_arg.split(" ", 1)[1]
+    decoded = base64.b64decode(b64_part).decode()
+    assert "my-access-token" in decoded
+    assert "user=user@example.com" in decoded
+
+
+def test_smtp_oauth2_without_token_raises():
+    item = _make_item()
+    with pytest.raises(RuntimeError, match="setup-auth"):
+        send_via_smtp(
+            items=[item],
+            config=_default_config(),
+            smtp_cfg=_oauth2_smtp(),
+            recipient="user@example.com",
+            m365_token=None,
+        )
+
+
+def test_smtp_oauth2_does_not_call_keyring():
+    item = _make_item()
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    mock_smtp.docmd.return_value = (235, b"OK")
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password") as mock_keyring,
+    ):
+        send_via_smtp(
+            items=[item],
+            config=_default_config(),
+            smtp_cfg=_oauth2_smtp(),
+            recipient="user@example.com",
+            m365_token="tok",
+            now=_FIXED_NOW,
+        )
+
+    mock_keyring.assert_not_called()
+
+
 def test_smtp_error_returns_false():
     import smtplib
     item = _make_item()
@@ -287,12 +411,19 @@ def test_smtp_error_returns_false():
 def test_unknown_source_excluded():
     unknown_item = _make_item(source="slack")
     jira_item = _make_item(source="jira")
-    result = send_via_smtp(
-        items=[unknown_item, jira_item],
-        config=_default_config(),
-        smtp_cfg=_default_smtp(),
-        recipient="user@example.com",
-        dry_run=True,
-        now=_FIXED_NOW,
-    )
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        result = send_via_smtp(
+            items=[unknown_item, jira_item],
+            config=_default_config(),
+            smtp_cfg=_default_smtp(),
+            recipient="user@example.com",
+            dry_run=True,
+            now=_FIXED_NOW,
+        )
     assert result is True

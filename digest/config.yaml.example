@@ -28,6 +28,8 @@ m365:
 #   port: 587                  # default; 465 for SSL-only servers
 #   username: you@company.com
 #   # use_tls: true            # default true (STARTTLS on port 587)
+#   # use_oauth2: false        # set true for M365 tenants with basic auth disabled (common default);
+#                              # reuses the M365 token from --setup-auth — no separate password needed
 #   # sender: you@company.com  # default: same as username
 
 llm:

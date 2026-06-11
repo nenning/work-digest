@@ -52,6 +52,7 @@ class SmtpConfig:
     username: str
     port: int = 587
     use_tls: bool = True
+    use_oauth2: bool = False
     sender: Optional[str] = None
 
 
@@ -85,6 +86,7 @@ def _load_smtp(raw: Optional[dict]) -> Optional[SmtpConfig]:
         username=raw["username"],
         port=int(raw.get("port", 587)),
         use_tls=bool(raw.get("use_tls", True)),
+        use_oauth2=bool(raw.get("use_oauth2", False)),
         sender=raw.get("sender") or None,
     )
 

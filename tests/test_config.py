@@ -144,3 +144,12 @@ def test_smtp_defaults(tmp_path):
     assert cfg.smtp.port == 587
     assert cfg.smtp.use_tls is True
     assert cfg.smtp.sender is None
+    assert cfg.smtp.use_oauth2 is False
+
+
+def test_smtp_use_oauth2_loads(tmp_path):
+    yaml = VALID_YAML + "\nsmtp:\n  host: smtp.office365.com\n  username: u@example.com\n  use_oauth2: true\n"
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml)
+    cfg = load_config(cfg_file)
+    assert cfg.smtp.use_oauth2 is True

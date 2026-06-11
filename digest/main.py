@@ -226,7 +226,8 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
         )
 
     atlassian_auth = get_auth_header(config.atlassian)
-    if config.m365.enabled:
+    needs_token = config.m365.enabled or (config.smtp and config.smtp.use_oauth2)
+    if needs_token:
         m365_token: Optional[str] = get_token(
             config.m365.tenant_id, cache_file, client_id=config.m365.client_id
         )
@@ -322,6 +323,7 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
             narrative, jira_items, confluence_items,
             subject, config.email, config.smtp, recipient,
             dry_run=args.dry_run, time_range=time_range,
+            m365_token=m365_token,
         )
     elif sys.platform == "win32":
         if not args.dry_run:
@@ -343,7 +345,8 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
 
     # Authenticate with both backends
     atlassian_auth = get_auth_header(config.atlassian)
-    if config.m365.enabled:
+    needs_token = config.m365.enabled or (config.smtp and config.smtp.use_oauth2)
+    if needs_token:
         m365_token: Optional[str] = get_token(
             config.m365.tenant_id, cache_file, client_id=config.m365.client_id
         )
@@ -463,6 +466,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
             notices=notices,
             time_range=time_range,
             timing=timing,
+            m365_token=m365_token,
         )
     elif sys.platform == "win32":
         if not args.dry_run:

@@ -83,6 +83,38 @@ def test_main_nothing_new(tmp_path, capsys, monkeypatch):
 # test_main_dry_run
 # ---------------------------------------------------------------------------
 
+def test_smtp_oauth2_token_passed_to_send(tmp_path, monkeypatch):
+    """When smtp.use_oauth2=True, main() acquires M365 token and passes it to send_via_smtp."""
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
+
+    from digest.config import SmtpConfig
+    from digest.models import SourceItem, SummarizedItem
+    ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+    cfg = _make_config(tmp_path, smtp=True)
+    cfg.smtp = SmtpConfig(host="smtp.office365.com", username="u@example.com", use_oauth2=True)
+
+    fake_item = SourceItem(source="jira", kind="comment", title="T", url="https://x.com",
+                           content="x", author="A", timestamp=ts)
+    fake_sum = SummarizedItem(source="jira", kind="comment", title="T", url="https://x.com",
+                              summary="s", author="A", timestamp=ts)
+    mock_send = MagicMock(return_value=True)
+
+    with (
+        patch("digest.main.load_config", return_value=cfg),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="oauth-token"),
+        patch("digest.main.jira.fetch", return_value=[fake_item]),
+        patch("digest.main.summarize_items", return_value=[fake_sum]),
+        patch("digest.main.send_via_smtp", mock_send),
+    ):
+        from digest.main import main
+        main()
+
+    mock_send.assert_called_once()
+    assert mock_send.call_args.kwargs.get("m365_token") == "oauth-token"
+
+
 def test_main_dry_run_smtp(tmp_path, monkeypatch):
     """With --dry-run and smtp config, send_via_smtp is called with dry_run=True."""
     monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
