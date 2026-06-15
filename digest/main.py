@@ -283,10 +283,14 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
 
     # --- Fetch Confluence team pages ---
     print("Fetching Confluence team pages...")
-    confluence_items = fetch_team_pages(
-        config.atlassian, atlassian_auth, mgmt_cfg, since, until, team_account_ids
-    )
-    print(f"  {len(confluence_items)} page(s)")
+    try:
+        confluence_items = fetch_team_pages(
+            config.atlassian, atlassian_auth, mgmt_cfg, since, until, team_account_ids
+        )
+        print(f"  {len(confluence_items)} page(s)")
+    except Exception as exc:
+        print(f"  WARNING: Confluence fetch failed ({exc.__class__.__name__}: {exc}); skipping.")
+        confluence_items = []
     print()
 
     if not jira_items and not confluence_items:
