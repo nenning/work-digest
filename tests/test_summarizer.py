@@ -186,6 +186,39 @@ def test_malformed_json_falls_back():
     assert results[0].priority == item.priority
 
 
+def test_json_shaped_response_with_stray_quote_is_salvaged():
+    item = _make_item(source="confluence", kind="mention", content="A" * 200)
+    config = _openai_config()
+
+    raw_text = (
+        '{ "summary": "Christian hät dich erwähnt und fragt zur Bestätigung: '
+        '„D.h. ich lass den Text so. Korrekt?"" }'
+    )
+
+    mock_message = MagicMock()
+    mock_message.content = raw_text
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_response
+
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+
+        results = summarize_items([item], config)
+
+    assert "{" not in results[0].summary
+    assert "\"summary\"" not in results[0].summary
+    assert results[0].summary == (
+        "Christian hät dich erwähnt und fragt zur Bestätigung: "
+        "„D.h. ich lass den Text so. Korrekt?\""
+    )
+    assert results[0].priority == item.priority
+
+
 # ---------------------------------------------------------------------------
 # Test 7: anthropic client returns correct summary
 # ---------------------------------------------------------------------------

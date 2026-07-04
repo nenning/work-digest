@@ -4,6 +4,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import re
 import threading
 import time
 from typing import List, Optional
@@ -234,6 +235,29 @@ def _strip_code_fence(text: str) -> str:
     return text
 
 
+_SUMMARY_SALVAGE_RE = re.compile(
+    r'"summary"\s*:\s*"(?P<summary>.*)"\s*(?:,\s*"priority"\s*:\s*"(?P<priority>[^"]*)")?\s*\}\s*$',
+    re.DOTALL,
+)
+
+
+def _salvage_summary(raw: str):
+    """Best-effort extraction of summary/priority from JSON-shaped but invalid LLM output.
+
+    Models occasionally emit a response that looks like {"summary": "..."} but fails to
+    parse because a quoted phrase inside the summary text wasn't escaped (e.g. a stray
+    closing quote). Falling back to the raw text in that case would leak the literal
+    braces/field names into the email, so recover the intended text via regex instead.
+    Returns None if the text isn't JSON-shaped enough to salvage.
+    """
+    match = _SUMMARY_SALVAGE_RE.search(raw.strip())
+    if not match:
+        return None
+    summary = match.group("summary").replace('\\"', '"').replace("\\n", "\n")
+    priority = match.group("priority")
+    return summary, priority
+
+
 def _parse_response(raw: str, item: SourceItem):
     """Parse the LLM JSON response; return (summary, priority) or _SKIP sentinel.
     Priority from LLM is only applied for outlook items; all others keep their original.
@@ -252,6 +276,16 @@ def _parse_response(raw: str, item: SourceItem):
             priority = item.priority
         return summary, priority
     except json.JSONDecodeError:
+        salvaged = _salvage_summary(_strip_code_fence(raw))
+        if salvaged is not None:
+            log.warning("LLM returned invalid JSON; salvaged summary via regex fallback")
+            summary, raw_priority = salvaged
+            if item.source == "outlook":
+                priority = raw_priority if raw_priority in VALID_PRIORITIES else item.priority
+            else:
+                priority = item.priority
+            return summary, priority
+        log.warning("LLM returned invalid JSON and summary could not be salvaged; showing raw text")
         return raw, item.priority
 
 
