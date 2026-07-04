@@ -288,14 +288,47 @@ def _merge_field_changes(changes: list[dict]) -> list[dict]:
     return result
 
 
+def _merge_comment_tier(items: List[SourceItem]) -> SourceItem:
+    """Merge multiple comment/description_change items for one ticket into a single item."""
+    labels = {"comment": "Kommentar", "description_change": "Beschreibung geändert"}
+    ordered = sorted(items, key=lambda i: i.timestamp)
+    parts = [f"[{labels.get(i.kind, i.kind)} von {i.author}] {i.content}" for i in ordered]
+    latest = ordered[-1]
+    return SourceItem(
+        source="jira", kind="comment",
+        title=latest.title, url=latest.url,
+        content="\n\n".join(parts),
+        author=latest.author,
+        timestamp=latest.timestamp,
+    )
+
+
+def _merge_mention_tier(items: List[SourceItem]) -> SourceItem:
+    """Merge multiple mention items for one ticket into a single item."""
+    ordered = sorted(items, key=lambda i: i.timestamp)
+    parts = [f"[Erwähnt von {i.author}] {i.content}" for i in ordered]
+    latest = ordered[-1]
+    authors = list(dict.fromkeys(i.author for i in ordered))
+    return SourceItem(
+        source="jira", kind="mention",
+        title=latest.title, url=latest.url,
+        content="\n\n".join(parts),
+        author=latest.author,
+        timestamp=latest.timestamp,
+        metadata={"mention_authors": authors},
+    )
+
+
 def _deduplicate(candidates: List[SourceItem]) -> List[SourceItem]:
-    """Keep only the highest-priority tier: mentions > comments/descriptions > field changes."""
+    """Keep only the highest-priority tier: mentions > comments/descriptions > field changes.
+    If the winning tier has more than one item, merge them into a single combined item.
+    """
     mentions = [i for i in candidates if i.kind == "mention"]
     if mentions:
-        return mentions
+        return [_merge_mention_tier(mentions)] if len(mentions) > 1 else mentions
     comments = [i for i in candidates if i.kind in ("comment", "description_change")]
     if comments:
-        return comments
+        return [_merge_comment_tier(comments)] if len(comments) > 1 else comments
     return [i for i in candidates if i.kind == "field_change"]
 
 

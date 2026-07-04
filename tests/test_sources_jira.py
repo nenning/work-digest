@@ -262,6 +262,70 @@ def test_deduplication_comment_suppresses_field_change():
     assert not any(i.kind == "field_change" for i in watched)
 
 
+def test_multiple_comments_on_same_ticket_merge_into_one_item():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["comment"]["comments"] = [
+        {"id": "101", "body": "First question", "author": {"displayName": "Marco"}, "updated": "2026-04-09T08:10:00Z"},
+        {"id": "102", "body": "Second question", "author": {"displayName": "Anna"}, "updated": "2026-04-09T08:20:00Z"},
+    ]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    comments = [i for i in items if i.kind == "comment"]
+    assert len(comments) == 1
+    assert "First question" in comments[0].content
+    assert "Second question" in comments[0].content
+    assert comments[0].author == "Anna"  # latest comment's author
+
+
+def test_comment_and_description_change_merge_into_one_item():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["description"] = "Updated description text"
+    issue["fields"]["comment"]["comments"] = [
+        {"id": "101", "body": "A plain comment", "author": {"displayName": "Marco"}, "updated": "2026-04-09T08:10:00Z"},
+    ]
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:20:00Z",
+        "author": {"displayName": "Anna"},
+        "items": [{"field": "description", "fromString": "old", "toString": "new"}],
+    }]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    comments = [i for i in items if i.kind == "comment"]
+    assert len(comments) == 1
+    assert "A plain comment" in comments[0].content
+    assert "Updated description text" in comments[0].content
+
+
+def test_multiple_mentions_on_same_ticket_merge_with_mention_authors():
+    def _mention_body():
+        return {
+            "type": "doc", "content": [{"type": "paragraph", "content": [
+                {"type": "mention", "attrs": {"id": "user-123", "text": "@Chris"}},
+                {"type": "text", "text": " please check"},
+            ]}],
+        }
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["comment"]["comments"] = [
+        {"id": "101", "body": _mention_body(), "author": {"displayName": "Marco"}, "updated": "2026-04-09T08:10:00Z"},
+        {"id": "102", "body": _mention_body(), "author": {"displayName": "Anna"}, "updated": "2026-04-09T08:20:00Z"},
+    ]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    mentions = [i for i in items if i.kind == "mention"]
+    assert len(mentions) == 1
+    assert mentions[0].metadata["mention_authors"] == ["Marco", "Anna"]
+    assert mentions[0].author == "Anna"  # latest mention's author
+
+
 def test_comment_before_since_excluded():
     issue = copy.deepcopy(ISSUE_BASE)
     issue["fields"]["comment"]["comments"] = [{
