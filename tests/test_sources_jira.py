@@ -124,7 +124,7 @@ def test_field_change_in_changelog_produces_field_change_kind():
     issue["changelog"]["histories"] = [{
         "created": "2026-04-09T08:15:00Z",
         "author": {"displayName": "Bob"},
-        "items": [{"field": "status", "fromString": "Open", "toString": "In Progress"}],
+        "items": [{"field": "priority", "fromString": "Low", "toString": "High"}],
     }]
     mock_get, mock_post = _mock_responses([issue])
     with patch("digest.sources.jira.requests.get", mock_get), \
@@ -133,9 +133,9 @@ def test_field_change_in_changelog_produces_field_change_kind():
 
     changes = [i for i in items if i.kind == "field_change"]
     assert len(changes) == 1
-    assert "status" in changes[0].content
-    assert "Open" in changes[0].content
-    assert "In Progress" in changes[0].content
+    assert "priority" in changes[0].content
+    assert "Low" in changes[0].content
+    assert "High" in changes[0].content
 
 
 def test_multiple_field_changes_aggregated_into_one_item():
@@ -144,7 +144,7 @@ def test_multiple_field_changes_aggregated_into_one_item():
         {
             "created": "2026-04-09T08:10:00Z",
             "author": {"displayName": "Bob"},
-            "items": [{"field": "status", "fromString": "Open", "toString": "In Progress"}],
+            "items": [{"field": "priority", "fromString": "Low", "toString": "High"}],
         },
         {
             "created": "2026-04-09T08:20:00Z",
@@ -159,8 +159,57 @@ def test_multiple_field_changes_aggregated_into_one_item():
 
     changes = [i for i in items if i.kind == "field_change"]
     assert len(changes) == 1
-    assert "status" in changes[0].content
+    assert "priority" in changes[0].content
     assert "assignee" in changes[0].content
+
+
+def test_status_field_change_produces_status_change_kind():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:15:00Z",
+        "author": {"displayName": "Bob"},
+        "items": [{"field": "status", "fromString": "Open", "toString": "In Progress"}],
+    }]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    status_changes = [i for i in items if i.kind == "status_change"]
+    field_changes = [i for i in items if i.kind == "field_change"]
+    assert len(status_changes) == 1
+    assert len(field_changes) == 0
+    assert "status" in status_changes[0].content
+    assert "Open" in status_changes[0].content
+    assert "In Progress" in status_changes[0].content
+
+
+def test_status_change_split_from_other_field_changes():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [
+        {
+            "created": "2026-04-09T08:10:00Z",
+            "author": {"displayName": "Bob"},
+            "items": [{"field": "status", "fromString": "Open", "toString": "In Progress"}],
+        },
+        {
+            "created": "2026-04-09T08:20:00Z",
+            "author": {"displayName": "Bob"},
+            "items": [{"field": "priority", "fromString": "Low", "toString": "High"}],
+        },
+    ]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    status_changes = [i for i in items if i.kind == "status_change"]
+    field_changes = [i for i in items if i.kind == "field_change"]
+    assert len(status_changes) == 1
+    assert len(field_changes) == 1
+    assert "status" in status_changes[0].content
+    assert "priority" in field_changes[0].content
+    assert "status" not in field_changes[0].content
 
 
 def test_description_change_produces_description_change_kind():
@@ -682,9 +731,9 @@ def _status_change_history(from_status="In Progress", to_status="Done"):
 
 
 def _status_change_item(items):
-    changes = [i for i in items if i.kind == "field_change"]
+    changes = [i for i in items if i.kind == "status_change"]
     assert len(changes) == 1
-    return next(c for c in changes[0].metadata["changes"] if c["field"] == "status")
+    return changes[0].metadata["changes"][0]
 
 
 def test_status_change_to_done_adds_unblocks_metadata():

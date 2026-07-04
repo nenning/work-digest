@@ -21,12 +21,13 @@ log = logging.getLogger(__name__)
 
 VALID_SOURCES = {"jira", "confluence", "teams", "outlook"}
 
-GROUP_ORDER = ["confluence", "jira_mentions", "jira_comments", "new", "jira_changes", "updates"]
+GROUP_ORDER = ["confluence", "jira_mentions", "jira_comments", "new", "jira_progress", "jira_changes", "updates"]
 GROUP_ICONS: Dict[str, str] = {
     "confluence": "📄",
     "jira_mentions": "🔔",
     "jira_comments": "💬",
     "new": "✨",
+    "jira_progress": "✅",
     "jira_changes": "🔁",
     "updates": "🔄",
 }
@@ -35,6 +36,7 @@ GROUP_LABELS: Dict[str, str] = {
     "jira_mentions": "Jira: Erwähnungen",
     "jira_comments": "Jira: Kommentare & Beschreibungen",
     "new": "Jira: Neue Tickets",
+    "jira_progress": "Jira: Ticket-Fortschritt",
     "jira_changes": "Jira: Feldänderungen",
     "updates": "Updates & Aktivität",
 }
@@ -54,6 +56,7 @@ SOURCE_LABELS: Dict[str, str] = {
 
 _NEW_KINDS = {"new_ticket"}
 _JIRA_COMMENT_KINDS = {"comment", "description_change"}
+_JIRA_PROGRESS_KINDS = {"status_change"}
 _JIRA_CHANGE_KINDS = {"field_change", "assignment"}
 
 
@@ -65,6 +68,8 @@ def _kind_to_group(source: str, kind: str) -> str:
             return "jira_mentions"
         if kind in _JIRA_COMMENT_KINDS:
             return "jira_comments"
+        if kind in _JIRA_PROGRESS_KINDS:
+            return "jira_progress"
         if kind in _JIRA_CHANGE_KINDS:
             return "jira_changes"
     if kind in _NEW_KINDS:

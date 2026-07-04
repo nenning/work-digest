@@ -301,12 +301,10 @@ def _collect_candidates(
             status_category = (issue["fields"].get("status") or {}).get("statusCategory", {}).get("key", "")
             if status_category == "done":
                 for c in net_changes:
-                    if c["field"] == "status":
+                    if c["field"].lower() == "status":
                         unblocks = _find_unblocked_tickets(issue, config)
                         if unblocks:
                             c["unblocks"] = unblocks
-            latest_ts = max(c["ts"] for c in net_changes)
-            latest_author = next(c["author"] for c in net_changes if c["ts"] == latest_ts)
             remote_links = None
             enriched = []
             for c in net_changes:
@@ -318,15 +316,33 @@ def _collect_candidates(
                     new_from = _linkify_remote_link(new_from, remote_links)
                     new_to = _linkify_remote_link(new_to, remote_links)
                 enriched.append({**c, "from": new_from, "to": new_to})
-            content = "; ".join(f"{c['field']}: {c['from']} → {c['to']}" for c in enriched)
-            candidates.append(SourceItem(
-                source="jira", kind="field_change",
-                title=title, url=url,
-                content=content,
-                author=latest_author,
-                timestamp=latest_ts,
-                metadata={"changes": enriched},
-            ))
+
+            status_entries = [c for c in enriched if c["field"].lower() == "status"]
+            other_entries = [c for c in enriched if c["field"].lower() != "status"]
+
+            if status_entries:
+                c = status_entries[0]
+                candidates.append(SourceItem(
+                    source="jira", kind="status_change",
+                    title=title, url=url,
+                    content=f"{c['field']}: {c['from']} → {c['to']}",
+                    author=c["author"],
+                    timestamp=c["ts"],
+                    metadata={"changes": [c]},
+                ))
+
+            if other_entries:
+                latest_ts = max(c["ts"] for c in other_entries)
+                latest_author = next(c["author"] for c in other_entries if c["ts"] == latest_ts)
+                content = "; ".join(f"{c['field']}: {c['from']} → {c['to']}" for c in other_entries)
+                candidates.append(SourceItem(
+                    source="jira", kind="field_change",
+                    title=title, url=url,
+                    content=content,
+                    author=latest_author,
+                    timestamp=latest_ts,
+                    metadata={"changes": other_entries},
+                ))
 
     return candidates
 
@@ -410,7 +426,7 @@ def _deduplicate(candidates: List[SourceItem]) -> List[SourceItem]:
     comments = [i for i in candidates if i.kind in ("comment", "description_change")]
     if comments:
         return [_merge_comment_tier(comments)] if len(comments) > 1 else comments
-    return [i for i in candidates if i.kind == "field_change"]
+    return [i for i in candidates if i.kind in ("field_change", "status_change")]
 
 
 def _has_mention(node, account_id: str) -> bool:

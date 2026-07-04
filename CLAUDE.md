@@ -84,7 +84,7 @@ State is only written on a successful personal digest send, never on `--dry-run`
 
 - **M365 optional:** `m365.enabled: false` skips Teams/Outlook fetching and opens a local Outlook draft via `win32com` COM instead of sending via Graph API.
 - **LLM prompts:** Content < 100 chars is quoted verbatim; longer content gets a 2–4 sentence summary. Confluence cosmetic diffs return `{"summary": null}` (skipped). Jira `new_ticket` and `field_change` items are formatted directly without an LLM call. Jira `mention` items get an action-focused prompt that names who mentioned you and what is expected.
-- **Jira digest sections:** Email groups Jira into four ordered sections: Erwähnungen (mentions) → Kommentare & Beschreibungen → Neue Tickets → Feldänderungen. Confluence appears before all Jira sections.
+- **Jira digest sections:** Email groups Jira into five ordered sections: Erwähnungen (mentions) → Kommentare & Beschreibungen → Neue Tickets → Ticket-Fortschritt (status changes) → Feldänderungen (other field changes). Confluence appears before all Jira sections.
 - **Fallback model:** If the primary LLM call fails, `summarizer.py` retries with `fallback_model` if configured.
 - **Outlook priority:** Outlook items are classified as `action_needed / meeting_invite / fyi / info` and color-coded in the HTML template.
 - **URL safety:** `email_sender.py` allows only `http`/`https` URLs to prevent `javascript:` injection.

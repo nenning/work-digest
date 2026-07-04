@@ -8,7 +8,7 @@ import pytest
 
 from digest.config import EmailConfig, SmtpConfig
 from digest.email_sender import (
-    TEMPLATES_DIR, _render_html, _safe_url,
+    TEMPLATES_DIR, _render_html, _safe_url, _kind_to_group, GROUP_ORDER,
     send_via_smtp, send_mgmt_summary_via_smtp,
 )
 from digest.models import SourceItem, SummarizedItem
@@ -276,6 +276,25 @@ def test_action_needed_class_in_html():
 
 def test_safe_url_blocks_javascript():
     assert _safe_url("javascript:alert(1)") == "#"
+
+
+# ---------------------------------------------------------------------------
+# Test 7: status_change kind routes to its own "jira_progress" group
+# ---------------------------------------------------------------------------
+
+def test_status_change_routes_to_progress_group():
+    assert _kind_to_group("jira", "status_change") == "jira_progress"
+
+
+def test_progress_group_ordered_between_new_and_changes():
+    assert GROUP_ORDER.index("new") < GROUP_ORDER.index("jira_progress") < GROUP_ORDER.index("jira_changes")
+
+
+def test_progress_group_label_rendered_in_html():
+    item = _make_item(summary="status: In Progress → Done")
+    sections = {"jira_progress": [item]}
+    html = _render_html(sections, "Test subject")
+    assert "Jira: Ticket-Fortschritt" in html
 
 
 def test_safe_url_allows_https():
