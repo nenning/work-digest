@@ -25,6 +25,7 @@ _BLOCKING_OUTWARD_PHRASES = {"blocks", "has to be done before"}
 
 _REMOTE_LINK_FIELDS = {"remoteworkitemlink", "remoteissuelink"}
 _REMOTE_LINK_RE = re.compile(r'links to "([^"]+)"')
+_REMOTE_LINK_SUFFIX_RE = re.compile(r'\s*\([^()]*\)$')
 
 _DATE_ONLY_FIELDS = {"duedate"}
 _DATE_TIME_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$')
@@ -81,14 +82,16 @@ def _linkify_remote_link(value: str, remote_links: list[dict]):
     match = _REMOTE_LINK_RE.search(value)
     if not match:
         return value
-    title = match.group(1)
+    quoted_title = match.group(1)
+    bare_title = _REMOTE_LINK_SUFFIX_RE.sub("", quoted_title).strip()
     remote_url = next(
-        (rl["object"]["url"] for rl in remote_links if rl.get("object", {}).get("title") == title),
+        (rl["object"]["url"] for rl in remote_links
+         if rl.get("object", {}).get("title") in (quoted_title, bare_title)),
         None,
     )
     if not remote_url or not remote_url.lower().startswith(("http://", "https://")):
         return value
-    return Markup('<a href="{}">{}</a>').format(remote_url, title)
+    return Markup('"[<a href="{}">{}</a>]"').format(remote_url, bare_title)
 
 
 
