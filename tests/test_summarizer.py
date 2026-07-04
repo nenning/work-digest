@@ -436,7 +436,7 @@ def test_format_field_change_escapes_html_in_unblocked_title():
 def test_format_field_change_renders_remote_link_as_markup():
     item = _field_change_item([{
         "field": "RemoteWorkItemLink", "from": "—",
-        "to": Markup('This work item links to "<a href="https://confluence.example.com/page">Page (Confluence)</a>"'),
+        "to": Markup('<a href="https://confluence.example.com/page">Page (Confluence)</a>'),
     }])
     result = _format_field_change(item)
     assert '<a href="https://confluence.example.com/page">Page (Confluence)</a>' in result.summary

@@ -77,8 +77,7 @@ def _linkify_remote_link(value: str, remote_links: list[dict]):
     )
     if not remote_url or not remote_url.lower().startswith(("http://", "https://")):
         return value
-    prefix, suffix = value[:match.start(1)], value[match.end(1):]
-    return Markup("{}").format(prefix) + Markup('<a href="{}">{}</a>').format(remote_url, title) + Markup("{}").format(suffix)
+    return Markup('<a href="{}">{}</a>').format(remote_url, title)
 
 
 

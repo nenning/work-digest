@@ -617,7 +617,7 @@ def test_remote_work_item_link_field_change_is_hyperlinked():
     changes = [i for i in items if i.kind == "field_change"]
     assert len(changes) == 1
     to_value = changes[0].metadata["changes"][0]["to"]
-    assert '<a href="https://confluence.example.com/page">Page (Confluence)</a>' in to_value
+    assert to_value == '<a href="https://confluence.example.com/page">Page (Confluence)</a>'
 
 
 def test_remote_work_item_link_without_matching_remote_link_left_plain():
