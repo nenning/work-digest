@@ -121,6 +121,42 @@ def test_long_content_prompt_says_summarize():
 
 
 # ---------------------------------------------------------------------------
+# Test 5b: Jira single mention prompt unchanged
+# ---------------------------------------------------------------------------
+
+def test_jira_single_mention_prompt_unchanged():
+    item = SourceItem(
+        source="jira", kind="mention",
+        title="PROJ-1: Fix bug", url="https://example.com/1",
+        content="please check this",
+        author="Anna",
+        timestamp=datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc),
+        metadata={"mention_author": "Anna"},
+    )
+    prompt = _build_prompt(item)
+    assert "Erwähnt von: Anna" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Test 5c: Jira merged mention prompt lists all authors
+# ---------------------------------------------------------------------------
+
+def test_jira_merged_mention_prompt_lists_all_authors():
+    item = SourceItem(
+        source="jira", kind="mention",
+        title="PROJ-1: Fix bug", url="https://example.com/1",
+        content="[Erwähnt von Marco] first\n\n[Erwähnt von Anna] second",
+        author="Anna",
+        timestamp=datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc),
+        metadata={"mention_authors": ["Marco", "Anna"]},
+    )
+    prompt = _build_prompt(item)
+    assert "Marco" in prompt
+    assert "Anna" in prompt
+    assert "insgesamt" in prompt
+
+
+# ---------------------------------------------------------------------------
 # Test 6: malformed JSON falls back to raw text
 # ---------------------------------------------------------------------------
 

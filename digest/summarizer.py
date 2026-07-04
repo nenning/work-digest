@@ -77,6 +77,18 @@ def _build_prompt(item: SourceItem, language: str = "de") -> str:
         )
 
     if item.source == "jira" and item.kind == "mention":
+        mention_authors = item.metadata.get("mention_authors")
+        if mention_authors:
+            authors_str = ", ".join(mention_authors)
+            return (
+                f"Mehrere Jira-Erwähnungen in Ticket '{item.title}' von: {authors_str}.\n"
+                f"Erwähnungen (chronologisch):\n{content}\n\n"
+                f"Fasse zusammen: wer hat dich jeweils erwähnt, was wurde gefragt/gesagt, "
+                f"welche Aktionen werden insgesamt erwartet.\n"
+                f"Sei konkret — der Leser soll ohne Öffnen des Tickets handeln können.\n"
+                f"Antworte auf {lang}. Wiederhole den Ticket-Key nicht.\n"
+                'Antworte nur mit JSON: {"summary": "..."}'
+            )
         mention_author = item.metadata.get("mention_author", item.author)
         return (
             f"Jira-Erwähnung in Ticket '{item.title}'.\n"
