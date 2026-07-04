@@ -26,6 +26,17 @@ _BLOCKING_OUTWARD_PHRASES = {"blocks", "has to be done before"}
 _REMOTE_LINK_FIELDS = {"remoteworkitemlink", "remoteissuelink"}
 _REMOTE_LINK_RE = re.compile(r'links to "([^"]+)"')
 
+_DATE_ONLY_FIELDS = {"duedate"}
+_DATE_TIME_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$')
+
+
+def _format_field_value(field: str, value: str) -> str:
+    if field.lower() in _DATE_ONLY_FIELDS:
+        match = _DATE_TIME_RE.match(value)
+        if match:
+            return match.group(1)
+    return value
+
 
 def _fetch_issue_summary(config: AtlassianConfig, auth_header: str, key: str, cache: dict) -> str | None:
     if key in cache:
@@ -268,8 +279,8 @@ def _collect_candidates(
                         timestamp=history_ts,
                     )
             else:
-                from_val = change.get("fromString") or "—"
-                to_val = change.get("toString") or "—"
+                from_val = _format_field_value(field, change.get("fromString") or "—")
+                to_val = _format_field_value(field, change.get("toString") or "—")
                 field_changes.append({
                     "field": field,
                     "from": from_val,

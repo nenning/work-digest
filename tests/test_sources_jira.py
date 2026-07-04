@@ -508,6 +508,23 @@ def test_rank_field_change_ignored():
     assert not any(i.kind == "field_change" for i in items)
 
 
+def test_duedate_field_change_formatted_as_date_only():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:00:00Z",
+        "author": {"displayName": "Anna"},
+        "items": [{"field": "duedate", "fromString": None, "toString": "2026-09-27 00:00:00.0"}],
+    }]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    changes = [i for i in items if i.kind == "field_change"]
+    assert len(changes) == 1
+    assert changes[0].metadata["changes"][0]["to"] == "2026-09-27"
+
+
 def _make_enrichment_mocks(issue, summaries):
     """Build (mock_get, mock_post) for enrichment tests, routing summary lookups via summaries dict."""
     changelogs = {issue["key"]: issue.get("changelog", {}).get("histories", [])}
