@@ -572,3 +572,112 @@ def test_issue_parent_association_field_change_includes_summary():
     assert len(changes) == 1
     assert "EGOV-58 (Old parent)" in changes[0].content
     assert "EGOV-9 (New parent)" in changes[0].content
+
+
+# --- status → Done "unblocks" detection ---
+
+def _status_change_history(from_status="In Progress", to_status="Done"):
+    return [{
+        "created": "2026-04-09T08:15:00Z",
+        "author": {"displayName": "Bob"},
+        "items": [{"field": "status", "fromString": from_status, "toString": to_status}],
+    }]
+
+
+def _status_change_item(items):
+    changes = [i for i in items if i.kind == "field_change"]
+    assert len(changes) == 1
+    return next(c for c in changes[0].metadata["changes"] if c["field"] == "status")
+
+
+def test_status_change_to_done_adds_unblocks_metadata():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["status"] = {"name": "Done", "statusCategory": {"key": "done"}}
+    issue["fields"]["issuelinks"] = [{
+        "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+        "outwardIssue": {
+            "key": "PROJ-2",
+            "fields": {"summary": "Deploy the fix", "status": {"statusCategory": {"key": "indeterminate"}}},
+        },
+    }]
+    issue["changelog"]["histories"] = _status_change_history()
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    status_change = _status_change_item(items)
+    assert status_change["unblocks"] == [{
+        "key": "PROJ-2", "title": "Deploy the fix", "url": "https://example.atlassian.net/browse/PROJ-2",
+    }]
+
+
+def test_multiple_unblocks_entries_collected():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["status"] = {"name": "Done", "statusCategory": {"key": "done"}}
+    issue["fields"]["issuelinks"] = [
+        {
+            "type": {"outward": "blocks"},
+            "outwardIssue": {"key": "PROJ-2", "fields": {"summary": "A", "status": {"statusCategory": {"key": "new"}}}},
+        },
+        {
+            "type": {"outward": "has to be done before"},
+            "outwardIssue": {"key": "PROJ-3", "fields": {"summary": "B", "status": {"statusCategory": {"key": "indeterminate"}}}},
+        },
+    ]
+    issue["changelog"]["histories"] = _status_change_history()
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    status_change = _status_change_item(items)
+    assert {u["key"] for u in status_change["unblocks"]} == {"PROJ-2", "PROJ-3"}
+
+
+def test_unblocks_excludes_already_done_blocked_ticket():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["status"] = {"name": "Done", "statusCategory": {"key": "done"}}
+    issue["fields"]["issuelinks"] = [{
+        "type": {"outward": "blocks"},
+        "outwardIssue": {"key": "PROJ-2", "fields": {"summary": "Already finished", "status": {"statusCategory": {"key": "done"}}}},
+    }]
+    issue["changelog"]["histories"] = _status_change_history()
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    assert "unblocks" not in _status_change_item(items)
+
+
+def test_non_blocking_link_type_ignored():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["status"] = {"name": "Done", "statusCategory": {"key": "done"}}
+    issue["fields"]["issuelinks"] = [{
+        "type": {"outward": "relates to"},
+        "outwardIssue": {"key": "PROJ-2", "fields": {"summary": "Unrelated", "status": {"statusCategory": {"key": "new"}}}},
+    }]
+    issue["changelog"]["histories"] = _status_change_history()
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    assert "unblocks" not in _status_change_item(items)
+
+
+def test_status_change_not_to_done_no_unblocks():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["fields"]["status"] = {"name": "In Progress", "statusCategory": {"key": "indeterminate"}}
+    issue["fields"]["issuelinks"] = [{
+        "type": {"outward": "blocks"},
+        "outwardIssue": {"key": "PROJ-2", "fields": {"summary": "X", "status": {"statusCategory": {"key": "new"}}}},
+    }]
+    issue["changelog"]["histories"] = _status_change_history(from_status="Open", to_status="In Progress")
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    assert "unblocks" not in _status_change_item(items)

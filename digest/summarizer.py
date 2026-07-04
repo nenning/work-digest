@@ -10,6 +10,7 @@ from typing import List, Optional
 
 import anthropic
 import openai
+from markupsafe import Markup
 
 from digest.config import LLMConfig
 from digest.models import SourceItem, SummarizedItem
@@ -267,13 +268,30 @@ def _build_description_prompt(item: SourceItem, language: str = "de") -> str:
     )
 
 
+def _format_unblocks_note(unblocks: list[dict]) -> Markup:
+    links = [Markup('[<a href="{}">{} - {}</a>]').format(u["url"], u["key"], u["title"]) for u in unblocks]
+    return Markup(" (unblocks {})").format(Markup(", ").join(links))
+
+
+def _format_field_change_line(change: dict) -> Markup:
+    line = Markup("{}: {} → {}").format(change["field"], change["from"], change["to"])
+    if change.get("unblocks"):
+        line += _format_unblocks_note(change["unblocks"])
+    return line
+
+
 def _format_field_change(item: SourceItem) -> SummarizedItem:
+    changes = item.metadata.get("changes") or []
+    if any(c.get("unblocks") for c in changes):
+        summary = Markup("; ").join(_format_field_change_line(c) for c in changes)
+    else:
+        summary = item.content
     return SummarizedItem(
         source=item.source,
         kind=item.kind,
         title=item.title,
         url=item.url,
-        summary=item.content,
+        summary=summary,
         author=item.author,
         timestamp=item.timestamp,
         priority=item.priority,

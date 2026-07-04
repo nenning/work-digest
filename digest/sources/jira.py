@@ -20,6 +20,8 @@ _IGNORED_FIELDS = _load_field_ignore()
 
 _JIRA_KEY_RE = re.compile(r'\b([A-Z][A-Z0-9]+-\d+)\b')
 
+_BLOCKING_OUTWARD_PHRASES = {"blocks", "has to be done before"}
+
 
 def _fetch_issue_summary(config: AtlassianConfig, auth_header: str, key: str, cache: dict) -> str | None:
     if key in cache:
@@ -95,7 +97,7 @@ def _jql_search(config: AtlassianConfig, auth_header: str, jql: str) -> list:
         },
         json={
             "jql": jql,
-            "fields": ["summary", "assignee", "reporter", "comment", "status", "priority", "updated", "created", "description"],
+            "fields": ["summary", "assignee", "reporter", "comment", "status", "priority", "updated", "created", "description", "issuelinks"],
             "maxResults": 50,
         },
         timeout=30,
@@ -251,6 +253,13 @@ def _collect_candidates(
     if field_changes:
         net_changes = _merge_field_changes(field_changes)
         if net_changes:
+            status_category = (issue["fields"].get("status") or {}).get("statusCategory", {}).get("key", "")
+            if status_category == "done":
+                for c in net_changes:
+                    if c["field"] == "status":
+                        unblocks = _find_unblocked_tickets(issue, config)
+                        if unblocks:
+                            c["unblocks"] = unblocks
             latest_ts = max(c["ts"] for c in net_changes)
             latest_author = next(c["author"] for c in net_changes if c["ts"] == latest_ts)
             enriched = [
@@ -270,6 +279,28 @@ def _collect_candidates(
             ))
 
     return candidates
+
+
+def _find_unblocked_tickets(issue: dict, config: AtlassianConfig) -> list[dict]:
+    """Return {"key", "title", "url"} for tickets this issue blocks, excluding tickets already Done."""
+    result = []
+    for link in issue["fields"].get("issuelinks", []):
+        outward_phrase = (link.get("type", {}).get("outward") or "").strip().lower()
+        if outward_phrase not in _BLOCKING_OUTWARD_PHRASES:
+            continue
+        target = link.get("outwardIssue")
+        if not target:
+            continue
+        target_fields = target.get("fields", {})
+        target_category = (target_fields.get("status") or {}).get("statusCategory", {}).get("key", "")
+        if target_category == "done":
+            continue
+        key = target.get("key")
+        title = target_fields.get("summary")
+        if not key or not title:
+            continue
+        result.append({"key": key, "title": title, "url": f"{config.url}/browse/{key}"})
+    return result
 
 
 def _merge_field_changes(changes: list[dict]) -> list[dict]:

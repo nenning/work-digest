@@ -7,7 +7,7 @@ import pytest
 
 from digest.config import LLMConfig
 from digest.models import SourceItem
-from digest.summarizer import _build_prompt, summarize_items
+from digest.summarizer import _build_prompt, summarize_items, _format_field_change
 
 
 # ---------------------------------------------------------------------------
@@ -379,3 +379,64 @@ def test_assignment_items_are_ignored():
 
     assert len(results) == 1
     assert results[0].kind == "comment"
+
+
+# ---------------------------------------------------------------------------
+# Test 14: field_change unblocks note rendered as safe HTML link
+# ---------------------------------------------------------------------------
+
+def _field_change_item(changes: list[dict]) -> SourceItem:
+    return SourceItem(
+        source="jira", kind="field_change", title="PROJ-1: Fix", url="https://example.com/1",
+        content="status: In Progress → Done", author="Bob",
+        timestamp=datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc),
+        metadata={"changes": changes},
+    )
+
+
+def test_format_field_change_without_unblocks_uses_plain_content():
+    item = _field_change_item([{"field": "status", "from": "In Progress", "to": "Done"}])
+    result = _format_field_change(item)
+    assert result.summary == item.content
+
+
+def test_format_field_change_renders_unblocks_as_link():
+    item = _field_change_item([{
+        "field": "status", "from": "In Progress", "to": "Done",
+        "unblocks": [{"key": "PROJ-2", "title": "Deploy", "url": "https://example.com/browse/PROJ-2"}],
+    }])
+    result = _format_field_change(item)
+    assert '<a href="https://example.com/browse/PROJ-2">PROJ-2 - Deploy</a>' in result.summary
+    assert "status: In Progress → Done (unblocks [" in result.summary
+
+
+def test_format_field_change_multiple_unblocks_comma_separated():
+    item = _field_change_item([{
+        "field": "status", "from": "In Progress", "to": "Done",
+        "unblocks": [
+            {"key": "PROJ-2", "title": "Deploy", "url": "https://example.com/browse/PROJ-2"},
+            {"key": "PROJ-3", "title": "Notify", "url": "https://example.com/browse/PROJ-3"},
+        ],
+    }])
+    result = _format_field_change(item)
+    assert "[<a href=\"https://example.com/browse/PROJ-2\">PROJ-2 - Deploy</a>], [<a href=\"https://example.com/browse/PROJ-3\">PROJ-3 - Notify</a>]" in result.summary
+
+
+def test_format_field_change_escapes_html_in_unblocked_title():
+    item = _field_change_item([{
+        "field": "status", "from": "In Progress", "to": "Done",
+        "unblocks": [{"key": "PROJ-2", "title": "<script>alert(1)</script>", "url": "https://example.com/browse/PROJ-2"}],
+    }])
+    result = _format_field_change(item)
+    assert "<script>" not in result.summary
+    assert "&lt;script&gt;" in result.summary
+
+
+def test_format_field_change_escapes_other_fields_when_rebuilt():
+    item = _field_change_item([
+        {"field": "assignee", "from": "—", "to": "Anna & Bob"},
+        {"field": "status", "from": "In Progress", "to": "Done",
+         "unblocks": [{"key": "PROJ-2", "title": "Deploy", "url": "https://example.com/browse/PROJ-2"}]},
+    ])
+    result = _format_field_change(item)
+    assert "Anna &amp; Bob" in result.summary
