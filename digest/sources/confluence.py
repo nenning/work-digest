@@ -7,6 +7,7 @@ import warnings
 import requests
 from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import urlparse, urlunparse
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
 
@@ -260,18 +261,29 @@ def _compute_diff(old_text: str, new_text: str) -> Optional[str]:
     return "\n\n".join(parts)
 
 
+def _page_key(url: str) -> str:
+    """Normalize a page/comment URL to its page-level form (no query string or
+    fragment), so mentions/comments on the same page group together regardless
+    of which comment anchor their individual URL points at.
+    """
+    parsed = urlparse(url)
+    return urlunparse(parsed._replace(query="", fragment=""))
+
+
 def _merge_by_page(items: List[SourceItem]) -> List[SourceItem]:
-    """Combine mention + page_update items for the same page URL into one item.
+    """Combine mention + page_update items for the same page into one item.
 
     When you were both mentioned in a page and the page was updated, the LLM
     gets a single item with both contexts rather than two separate items.
+    Grouping uses a normalized page key so multiple mention-comments on the
+    same page (each with a distinct comment-anchor URL) also merge.
     """
-    by_url: dict = {}
+    by_key: dict = {}
     for item in items:
-        by_url.setdefault(item.url, []).append(item)
+        by_key.setdefault(_page_key(item.url), []).append(item)
 
     merged: List[SourceItem] = []
-    for url, page_items in by_url.items():
+    for key, page_items in by_key.items():
         if len(page_items) == 1:
             merged.append(page_items[0])
             continue
@@ -286,7 +298,7 @@ def _merge_by_page(items: List[SourceItem]) -> List[SourceItem]:
             source="confluence",
             kind="page",
             title=page_items[0].title,
-            url=url,
+            url=key,
             content="\n\n".join(parts),
             author=max(page_items, key=lambda x: x.timestamp).author,
             timestamp=max(it.timestamp for it in page_items),

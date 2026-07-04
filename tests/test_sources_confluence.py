@@ -103,6 +103,40 @@ def test_fetch_mentions():
     assert mentions[0].author == "Bob"
 
 
+def test_multiple_mentions_on_same_page_merge():
+    mention1 = {
+        "title": "API Guidelines",
+        "type": "comment",
+        "id": "c1",
+        "_links": {"webui": "/spaces/ENG/pages/456?focusedCommentId=1#comment-1"},
+        "history": {"createdBy": {"displayName": "Bob"}, "createdDate": "2026-04-09T08:00:00Z"},
+    }
+    mention2 = {
+        "title": "API Guidelines",
+        "type": "comment",
+        "id": "c2",
+        "_links": {"webui": "/spaces/ENG/pages/456?focusedCommentId=2#comment-2"},
+        "history": {"createdBy": {"displayName": "Anna"}, "createdDate": "2026-04-09T09:00:00Z"},
+    }
+    responses = [
+        make_mock({"accountId": "user-abc"}),                                          # user id
+        make_mock({"results": [mention1, mention2]}),                                  # mentions CQL
+        make_mock({"body": {"storage": {"value": "<p>Please fix ASAP</p>"}}}),          # mention1 comment body
+        make_mock({"body": {"storage": {"value": "<p>Also check this</p>"}}}),          # mention2 comment body
+        make_mock({"results": []}),                                                    # page updates CQL
+    ]
+    with patch("digest.sources.confluence.requests.get", side_effect=responses):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    merged = [i for i in items if i.kind == "page"]
+    assert len(merged) == 1
+    assert merged[0].url == "https://example.atlassian.net/wiki/spaces/ENG/pages/456"
+    assert "Bob" in merged[0].content
+    assert "Anna" in merged[0].content
+    assert "Please fix ASAP" in merged[0].content
+    assert "Also check this" in merged[0].content
+
+
 def test_invalid_space_key_raises():
     with pytest.raises(ValueError, match="Invalid Confluence space key"):
         _validate_space_keys(["lowercase"])
