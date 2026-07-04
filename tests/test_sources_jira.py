@@ -574,6 +574,96 @@ def test_issue_parent_association_field_change_includes_summary():
     assert "EGOV-9 (New parent)" in changes[0].content
 
 
+def test_remote_work_item_link_field_change_is_hyperlinked():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:00:00Z",
+        "author": {"displayName": "Anna"},
+        "items": [{
+            "field": "RemoteWorkItemLink", "fromString": None,
+            "toString": 'This work item links to "Page (Confluence)"',
+        }],
+    }]
+
+    def _get_side_effect(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        resp.ok = True
+        if "/myself" in url:
+            resp.json.return_value = CURRENT_USER
+        elif "/changelog" in url:
+            resp.json.return_value = {"values": issue["changelog"]["histories"]}
+        elif "/remotelink" in url:
+            resp.json.return_value = [
+                {"object": {"title": "Page (Confluence)", "url": "https://confluence.example.com/page"}},
+            ]
+        else:
+            resp.json.return_value = {}
+        return resp
+
+    def _post_side_effect(*args, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        jql = kwargs.get("json", {}).get("jql", "")
+        resp.json.return_value = {"issues": [] if "created >=" in jql else [issue]}
+        return resp
+
+    mock_get = MagicMock(side_effect=_get_side_effect)
+    mock_post = MagicMock(side_effect=_post_side_effect)
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    changes = [i for i in items if i.kind == "field_change"]
+    assert len(changes) == 1
+    to_value = changes[0].metadata["changes"][0]["to"]
+    assert '<a href="https://confluence.example.com/page">Page (Confluence)</a>' in to_value
+
+
+def test_remote_work_item_link_without_matching_remote_link_left_plain():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:00:00Z",
+        "author": {"displayName": "Anna"},
+        "items": [{
+            "field": "RemoteWorkItemLink", "fromString": None,
+            "toString": 'This work item links to "Page (Confluence)"',
+        }],
+    }]
+
+    def _get_side_effect(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        resp.ok = True
+        if "/myself" in url:
+            resp.json.return_value = CURRENT_USER
+        elif "/changelog" in url:
+            resp.json.return_value = {"values": issue["changelog"]["histories"]}
+        elif "/remotelink" in url:
+            resp.json.return_value = []
+        else:
+            resp.json.return_value = {}
+        return resp
+
+    def _post_side_effect(*args, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        jql = kwargs.get("json", {}).get("jql", "")
+        resp.json.return_value = {"issues": [] if "created >=" in jql else [issue]}
+        return resp
+
+    mock_get = MagicMock(side_effect=_get_side_effect)
+    mock_post = MagicMock(side_effect=_post_side_effect)
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    changes = [i for i in items if i.kind == "field_change"]
+    to_value = changes[0].metadata["changes"][0]["to"]
+    assert to_value == 'This work item links to "Page (Confluence)"'
+    assert "<a" not in to_value
+
+
 # --- status → Done "unblocks" detection ---
 
 def _status_change_history(from_status="In Progress", to_status="Done"):

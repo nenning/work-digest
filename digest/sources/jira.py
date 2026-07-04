@@ -4,6 +4,7 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+from markupsafe import Markup
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
 
@@ -21,6 +22,9 @@ _IGNORED_FIELDS = _load_field_ignore()
 _JIRA_KEY_RE = re.compile(r'\b([A-Z][A-Z0-9]+-\d+)\b')
 
 _BLOCKING_OUTWARD_PHRASES = {"blocks", "has to be done before"}
+
+_REMOTE_LINK_FIELDS = {"remoteworkitemlink", "remoteissuelink"}
+_REMOTE_LINK_RE = re.compile(r'links to "([^"]+)"')
 
 
 def _fetch_issue_summary(config: AtlassianConfig, auth_header: str, key: str, cache: dict) -> str | None:
@@ -47,6 +51,34 @@ def _enrich_keys(value: str, config: AtlassianConfig, auth_header: str, cache: d
         summary = _fetch_issue_summary(config, auth_header, m.group(1), cache)
         return f"{m.group(1)} ({summary})" if summary else m.group(1)
     return _JIRA_KEY_RE.sub(replace, value)
+
+
+def _fetch_remote_links(config: AtlassianConfig, auth_header: str, key: str) -> list[dict]:
+    try:
+        resp = requests.get(
+            f"{config.url}/rest/api/3/issue/{key}/remotelink",
+            headers={"Authorization": auth_header, "Accept": "application/json"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return []
+
+
+def _linkify_remote_link(value: str, remote_links: list[dict]):
+    match = _REMOTE_LINK_RE.search(value)
+    if not match:
+        return value
+    title = match.group(1)
+    remote_url = next(
+        (rl["object"]["url"] for rl in remote_links if rl.get("object", {}).get("title") == title),
+        None,
+    )
+    if not remote_url or not remote_url.lower().startswith(("http://", "https://")):
+        return value
+    prefix, suffix = value[:match.start(1)], value[match.end(1):]
+    return Markup("{}").format(prefix) + Markup('<a href="{}">{}</a>').format(remote_url, title) + Markup("{}").format(suffix)
 
 
 
@@ -262,12 +294,17 @@ def _collect_candidates(
                             c["unblocks"] = unblocks
             latest_ts = max(c["ts"] for c in net_changes)
             latest_author = next(c["author"] for c in net_changes if c["ts"] == latest_ts)
-            enriched = [
-                {**c,
-                 "from": _enrich_keys(c["from"], config, auth_header, summary_cache),
-                 "to": _enrich_keys(c["to"], config, auth_header, summary_cache)}
-                for c in net_changes
-            ]
+            remote_links = None
+            enriched = []
+            for c in net_changes:
+                new_from = _enrich_keys(c["from"], config, auth_header, summary_cache)
+                new_to = _enrich_keys(c["to"], config, auth_header, summary_cache)
+                if c["field"].lower() in _REMOTE_LINK_FIELDS:
+                    if remote_links is None:
+                        remote_links = _fetch_remote_links(config, auth_header, issue["key"])
+                    new_from = _linkify_remote_link(new_from, remote_links)
+                    new_to = _linkify_remote_link(new_to, remote_links)
+                enriched.append({**c, "from": new_from, "to": new_to})
             content = "; ".join(f"{c['field']}: {c['from']} → {c['to']}" for c in enriched)
             candidates.append(SourceItem(
                 source="jira", kind="field_change",

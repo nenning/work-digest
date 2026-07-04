@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from markupsafe import Markup
 
 from digest.config import LLMConfig
 from digest.models import SourceItem
@@ -430,6 +431,15 @@ def test_format_field_change_escapes_html_in_unblocked_title():
     result = _format_field_change(item)
     assert "<script>" not in result.summary
     assert "&lt;script&gt;" in result.summary
+
+
+def test_format_field_change_renders_remote_link_as_markup():
+    item = _field_change_item([{
+        "field": "RemoteWorkItemLink", "from": "—",
+        "to": Markup('This work item links to "<a href="https://confluence.example.com/page">Page (Confluence)</a>"'),
+    }])
+    result = _format_field_change(item)
+    assert '<a href="https://confluence.example.com/page">Page (Confluence)</a>' in result.summary
 
 
 def test_format_field_change_escapes_other_fields_when_rebuilt():

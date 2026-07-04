@@ -2,3 +2,5 @@
 # One field name per line; case-insensitive; # lines and blank lines ignored.
 Task mode
 Rank
+Epic Color
+Issue color

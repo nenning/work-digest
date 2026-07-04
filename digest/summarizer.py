@@ -282,7 +282,7 @@ def _format_field_change_line(change: dict) -> Markup:
 
 def _format_field_change(item: SourceItem) -> SummarizedItem:
     changes = item.metadata.get("changes") or []
-    if any(c.get("unblocks") for c in changes):
+    if any(c.get("unblocks") or isinstance(c.get("from"), Markup) or isinstance(c.get("to"), Markup) for c in changes):
         summary = Markup("; ").join(_format_field_change_line(c) for c in changes)
     else:
         summary = item.content
