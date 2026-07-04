@@ -530,27 +530,3 @@ def test_format_field_change_escapes_other_fields_when_rebuilt():
     ])
     result = _format_field_change(item)
     assert "Anna &amp; Bob" in result.summary
-
-
-# ---------------------------------------------------------------------------
-# Test 15: status_change items skip the LLM like field_change does
-# ---------------------------------------------------------------------------
-
-def test_status_change_skips_llm():
-    item = SourceItem(
-        source="jira", kind="status_change", title="PROJ-1: Fix", url="https://example.com/1",
-        content="status: In Progress → Done", author="Bob",
-        timestamp=datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc),
-        metadata={"changes": [{"field": "status", "from": "In Progress", "to": "Done"}]},
-    )
-    config = _openai_config()
-    mock_client = MagicMock()
-
-    with patch("digest.summarizer.openai") as mock_openai:
-        mock_openai.OpenAI.return_value = mock_client
-        results = summarize_items([item], config)
-
-    assert len(results) == 1
-    assert results[0].kind == "status_change"
-    assert results[0].summary == "status: In Progress → Done"
-    mock_client.chat.completions.create.assert_not_called()

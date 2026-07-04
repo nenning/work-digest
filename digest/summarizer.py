@@ -464,11 +464,11 @@ def summarize_items(
     logging.getLogger("anthropic").setLevel(logging.WARNING)
 
     ticket_items = [i for i in items if i.source == "jira" and i.kind == "new_ticket"]
-    field_change_items = [i for i in items if i.source == "jira" and i.kind in ("field_change", "status_change")]
-    llm_items = [i for i in items if not (i.source == "jira" and i.kind in ("new_ticket", "assignment", "field_change", "status_change"))]
+    field_change_items = [i for i in items if i.source == "jira" and i.kind == "field_change"]
+    llm_items = [i for i in items if not (i.source == "jira" and i.kind in ("new_ticket", "assignment", "field_change"))]
     total = len(ticket_items) + len(llm_items)
 
-    if total == 0 and not field_change_items:
+    if total == 0:
         return []
 
     model_str = ", ".join(config.models)
