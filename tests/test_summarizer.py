@@ -387,6 +387,53 @@ def test_new_ticket_without_description_skips_llm():
 
 
 # ---------------------------------------------------------------------------
+# Test 12b: free-text language override picks German labels and is sent
+# verbatim to the LLM
+# ---------------------------------------------------------------------------
+
+def test_new_ticket_free_text_language_override_picks_german_labels():
+    item = SourceItem(
+        source="jira", kind="new_ticket",
+        title="PROJ-4: Empty description",
+        url="https://example.com/browse/PROJ-4",
+        content="",
+        author="Bob",
+        timestamp=datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc),
+        metadata={"assignee": "Alice", "description": ""},
+    )
+    config = _openai_config()
+    mock_client = MagicMock()
+
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        results = summarize_items([item], config, language="Deutsch (Schweiz)")
+
+    assert results[0].summary == "Neu."
+
+
+def test_comment_free_text_language_override_used_verbatim_in_prompt():
+    item = _make_item(content="A" * 200)
+    config = _openai_config()
+
+    llm_reply = json.dumps({"summary": "A comment was made."})
+    mock_message = MagicMock()
+    mock_message.content = llm_reply
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_response
+
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        summarize_items([item], config, language="English (US)")
+
+    prompt = mock_client.chat.completions.create.call_args[1]["messages"][0]["content"]
+    assert "English (US)" in prompt
+
+
+# ---------------------------------------------------------------------------
 # Test 13: assignment items are ignored entirely
 # ---------------------------------------------------------------------------
 

@@ -53,6 +53,16 @@ def _language_name(code: str) -> str:
     return _LANGUAGE_NAMES.get(code.lower(), code)
 
 
+def _label_set_key(language: str) -> str:
+    """Map an ISO code or free-text override (e.g. "Deutsch (Schweiz)", "English (US)") to a label set key."""
+    normalized = language.strip().lower()
+    if normalized.startswith("de"):
+        return "de"
+    if normalized.startswith("en"):
+        return "en"
+    return normalized
+
+
 def _build_prompt(item: SourceItem, language: str = "de") -> str:
     """Build an adaptive prompt for the given item."""
     content = item.content[:_CONTENT_MAX_CHARS]
@@ -333,7 +343,7 @@ def _format_field_change(item: SourceItem) -> SummarizedItem:
 
 
 def _format_new_ticket(item: SourceItem, description_summary: str | None = None, language: str = "de") -> SummarizedItem:
-    labels = _NEW_TICKET_LABELS.get(language.lower(), _DEFAULT_LABELS)
+    labels = _NEW_TICKET_LABELS.get(_label_set_key(language), _DEFAULT_LABELS)
     new_label = labels.get("new", "Neu")
     summary = f"{new_label}. {description_summary}" if description_summary else f"{new_label}."
     return SummarizedItem(

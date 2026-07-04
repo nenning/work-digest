@@ -48,7 +48,8 @@ email:
   subject_prefix: "[Digest]"
   recipient: you@company.com   # required for all send paths (SMTP and COM)
 
-language: de   # ISO 639-1 output language for LLM summaries (de | en | fr | es | it | ...)
+language: de   # output language for LLM summaries: ISO 639-1 code (de | en | fr | es | it | ...)
+               # or a free-text override sent verbatim to the LLM, e.g. "Deutsch (Schweiz)" or "English (US)"
 
 data_dir: ~/.digest
 
