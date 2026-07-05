@@ -158,6 +158,19 @@ def test_jira_merged_mention_prompt_lists_all_authors():
 
 
 # ---------------------------------------------------------------------------
+# Test 5d: Confluence page-update prompt steers away from structural descriptions
+# ---------------------------------------------------------------------------
+
+def test_confluence_page_update_prompt_focuses_on_content_not_structure():
+    item = _make_item(source="confluence", kind="page_update", content="A" * 200)
+    prompt = _build_prompt(item)
+
+    assert "structure" in prompt.lower() or "scaffolding" in prompt.lower()
+    assert "content" in prompt.lower()
+    assert "structural" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
 # Test 6: malformed JSON falls back to raw text
 # ---------------------------------------------------------------------------
 

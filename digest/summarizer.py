@@ -71,17 +71,24 @@ def _build_prompt(item: SourceItem, language: str = "de") -> str:
     # Confluence page updates: summarise the diff, not the whole page.
     if item.source == "confluence" and item.kind in ("page_update", "page"):
         null_note = (
-            'Return {"summary": null} (skip entirely) if the changes are purely cosmetic. '
-            'Cosmetic changes include: typo/spelling corrections, grammar fixes, '
+            'Return {"summary": null} (skip entirely) if the changes are purely cosmetic or '
+            'structural/organizational. That includes: typo/spelling corrections, grammar fixes, '
             'punctuation or whitespace changes, minor rewording without new meaning, '
             'hyphenation or capitalisation standardisation, year/number corrections in references, '
-            'and sentence restructuring that preserves the original meaning. '
-            'Only summarise if there is genuinely new information: new requirements, '
-            'new sections, updated decisions, added or removed content with substantive meaning.'
+            'sentence restructuring that preserves the original meaning, and adding page scaffolding '
+            'such as agendas, headings, tables, or status-tracking layouts that introduce no concrete '
+            'content of their own. '
+            'Only summarise if there is genuinely new SUBSTANCE: concrete decisions, action items, '
+            'risks, dependencies, requirements, or facts (names, dates, numbers, outcomes).'
         )
         return (
             f"The following shows what changed in the Confluence page '{item.title}'.\n"
             f"Summarise only the meaningful additions or removals in 1-2 sentences.\n"
+            f"Focus strictly on the actual content — what was decided, discussed, or changed. "
+            f"Never describe the page's structure or formatting itself "
+            f"(e.g. do not say things like 'a table was added' or 'the page now has a structured agenda' "
+            f"or 'a status-tracking system was introduced'); if that structural scaffolding contains "
+            f"real content, summarise the content, not the scaffolding.\n"
             f"Respond in {lang}.\n"
             f"{null_note}\n\n"
             f"Changes:\n{content}\n\n"
