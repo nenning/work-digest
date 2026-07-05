@@ -198,3 +198,41 @@ def test_storage_to_text_status_macro_uses_title_only():
     result_legacy = _storage_to_text(red_legacy)
     assert result_legacy == "Legacy"
     assert "Red" not in result_legacy
+
+
+def test_storage_to_text_table_keeps_rows_grouped():
+    """Table cells must stay grouped by row so a value keeps its column context
+    instead of collapsing into an undifferentiated flat list of header + values."""
+    table_html = (
+        "<table><tbody>"
+        "<tr><th>Stream</th><th>Status</th><th>Risks</th></tr>"
+        "<tr><td>Portalplattform High Code</td><td>On Track</td><td>None</td></tr>"
+        "<tr><td>Low Code Plattform</td><td>At Risk</td><td>Dependency on Team X</td></tr>"
+        "</tbody></table>"
+    )
+    result = _storage_to_text(table_html)
+    lines = result.splitlines()
+    assert "Stream | Status | Risks" in lines
+    assert "Portalplattform High Code | On Track | None" in lines
+    assert "Low Code Plattform | At Risk | Dependency on Team X" in lines
+
+
+def test_storage_to_text_table_cell_with_nested_tags():
+    table_html = "<table><tbody><tr><td><p>Alice</p></td><td>Backend <strong>lead</strong></td></tr></tbody></table>"
+    result = _storage_to_text(table_html)
+    assert result == "Alice | Backend lead"
+
+
+def test_compute_diff_keeps_short_table_row_with_long_row_context():
+    """A row's cells are diffed together, so a short status value survives the
+    trivial-change filter as long as its row carries enough content overall."""
+    old_table = "<table><tbody></tbody></table>"
+    new_table = (
+        "<table><tbody>"
+        "<tr><td>Portalplattform High Code</td><td>On Track</td><td>None</td></tr>"
+        "</tbody></table>"
+    )
+    diff = _compute_diff(_storage_to_text(old_table), _storage_to_text(new_table))
+    assert diff is not None
+    assert "On Track" in diff
+    assert "Portalplattform High Code" in diff

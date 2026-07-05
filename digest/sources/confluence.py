@@ -210,6 +210,37 @@ def _fetch_page_diff(
     return _compute_diff(prev_text, curr_text)
 
 
+_TABLE_RE = re.compile(r"<table\b[^>]*>(.*?)</table>", re.IGNORECASE | re.DOTALL)
+_ROW_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
+_CELL_RE = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
+
+
+def _cell_text(cell_html: str) -> str:
+    text = re.sub(r"<(?:p|li|br)[^>]*/?>", " ", cell_html, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _table_to_rows(table_html: str) -> str:
+    """Render a table as "cell | cell | cell" rows.
+
+    Stripping table tags outright collapses every cell into one flat list of
+    values with no way to tell a header from a row or which value belongs to
+    which column -- an LLM summarizing that flat list tends to describe the
+    columns it can see (i.e. the table's structure) rather than the specific
+    values, since it can't attribute them to anything. Keeping cells grouped
+    by row preserves enough context to summarize the actual content instead.
+    """
+    rows = []
+    for row_match in _ROW_RE.finditer(table_html):
+        cells = [_cell_text(c) for c in _CELL_RE.findall(row_match.group(1))]
+        cells = [c for c in cells if c]
+        if cells:
+            rows.append(" | ".join(cells))
+    return "\n".join(rows)
+
+
 def _storage_to_text(storage_html: str) -> str:
     """Convert Confluence storage format (XHTML) to plain text, preserving structure."""
     # Status macros contain both a colour parameter and a title parameter; strip all
@@ -224,8 +255,11 @@ def _storage_to_text(storage_html: str) -> str:
         storage_html,
         flags=re.IGNORECASE | re.DOTALL,
     )
+    # Render tables as pipe-delimited rows before the generic tag stripping below
+    # would otherwise flatten every cell into an undifferentiated list of values.
+    text = _TABLE_RE.sub(lambda m: "\n" + _table_to_rows(m.group(1)) + "\n", text)
     # Replace block elements with newlines to preserve paragraph/list structure
-    text = re.sub(r"<(?:p|li|h[1-6]|br|tr|td|th)[^>]*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<(?:p|li|h[1-6]|br)[^>]*/?>", "\n", text, flags=re.IGNORECASE)
     # Strip remaining tags
     text = re.sub(r"<[^>]+>", "", text)
     # Decode HTML entities (e.g. &amp; → &, &nbsp; → space)
