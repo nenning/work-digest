@@ -268,7 +268,7 @@ def send_via_smtp(
 def send_mgmt_summary_via_smtp(
     narrative: str,
     jira_items: List[SourceItem],
-    confluence_items: List[SourceItem],
+    confluence_items: List[SummarizedItem],
     subject: str,
     config: EmailConfig,
     smtp_cfg: SmtpConfig,
@@ -356,7 +356,7 @@ def send_via_com(
 def _render_mgmt_html(
     narrative: str,
     jira_items: List[SourceItem],
-    confluence_items: List[SourceItem],
+    confluence_items: List[SummarizedItem],
     subject: str,
     time_range: Optional[str] = None,
     notices: Optional[List[str]] = None,
@@ -394,7 +394,7 @@ def _render_mgmt_html(
 def send_mgmt_summary_via_com(
     narrative: str,
     jira_items: List[SourceItem],
-    confluence_items: List[SourceItem],
+    confluence_items: List[SummarizedItem],
     subject: str,
     config: EmailConfig,
     recipient: str,

@@ -1,9 +1,6 @@
 """Tests for digest.sources.mgmt_confluence."""
-import warnings
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from digest.config import AtlassianConfig, MgmtSummaryConfig
 from digest.sources.mgmt_confluence import fetch_team_pages
@@ -28,28 +25,60 @@ SINCE = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 5, 31, 0, 0, 0, tzinfo=timezone.utc)
 TEAM_IDS = {"a1", "a2"}
 
+_NEW_PAGE_BODY = "<p>This is a brand new page with substantial content describing the rollout plan.</p>"
+
 
 def _make_page(page_id="1", title="My Page", webui="/pages/1",
-               author_name="Alice", when="2026-05-10T09:00:00Z"):
+               author_id="a1", author_name="Alice", when="2026-05-10T09:00:00Z",
+               version_number=1):
     return {
         "id": page_id,
         "title": title,
         "_links": {"webui": webui},
         "version": {
-            "by": {"displayName": author_name},
+            "number": version_number,
+            "by": {"accountId": author_id, "displayName": author_name},
             "when": when,
         },
     }
 
 
-def _search_resp(results, total=None):
+def _search_resp(results):
+    resp = MagicMock()
+    resp.raise_for_status = lambda: None
+    resp.json.return_value = {"results": results}
+    return resp
+
+
+def _version_resp(author_id, author_name, when):
     resp = MagicMock()
     resp.raise_for_status = lambda: None
     resp.json.return_value = {
-        "results": results,
-        "totalSize": total if total is not None else len(results),
+        "version": {"by": {"accountId": author_id, "displayName": author_name}, "when": when}
     }
     return resp
+
+
+def _body_resp(html):
+    resp = MagicMock()
+    resp.raise_for_status = lambda: None
+    resp.json.return_value = {"body": {"storage": {"value": html}}}
+    return resp
+
+
+def _default_body_get(pages_or_page):
+    """Generic fake_get: search returns given page(s); any body.storage fetch
+    returns substantive new-page content (used when no history-walk is expected)."""
+    results = pages_or_page if isinstance(pages_or_page, list) else [pages_or_page]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            return _search_resp(results)
+        if params.get("expand") == "body.storage":
+            return _body_resp(_NEW_PAGE_BODY)
+        raise AssertionError(f"unexpected call: {url} {params}")
+
+    return fake_get
 
 
 # ---------------------------------------------------------------------------
@@ -58,13 +87,14 @@ def _search_resp(results, total=None):
 
 def test_fetch_team_pages_basic():
     pages = [
-        _make_page("1", "Page One", "/pages/1", "Alice", "2026-05-10T09:00:00Z"),
-        _make_page("2", "Page Two", "/pages/2", "Bob", "2026-05-12T10:00:00Z"),
+        _make_page("1", "Page One", "/pages/1", "a1", "Alice", "2026-05-10T09:00:00Z"),
+        _make_page("2", "Page Two", "/pages/2", "a2", "Bob", "2026-05-12T10:00:00Z"),
     ]
-    mock_get = MagicMock(return_value=_search_resp(pages))
-    with patch("digest.sources.mgmt_confluence.requests.get", mock_get):
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=_default_body_get(pages)):
         items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
 
+    items.sort(key=lambda i: i.title)
     assert len(items) == 2
     assert items[0].kind == "page_update"
     assert items[0].title == "Page One"
@@ -72,6 +102,88 @@ def test_fetch_team_pages_basic():
     assert "https://example.atlassian.net/wiki/pages/1" in items[0].url
     assert items[0].timestamp == datetime(2026, 5, 10, 9, 0, 0, tzinfo=timezone.utc)
     assert items[1].title == "Page Two"
+
+
+def test_fetch_team_pages_new_page_diffs_against_empty_baseline():
+    """A page created within the window (version 1) has no history to diff against,
+    so the whole body should show up as newly added content."""
+    page = _make_page("1", "New Page", "/pages/1", version_number=1)
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=_default_body_get(page)):
+        items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+
+    assert len(items) == 1
+    assert "rollout plan" in items[0].content
+    assert items[0].content.startswith("Added:")
+
+
+def test_fetch_team_pages_finds_overwritten_team_edit():
+    """A team member's edit that was later overwritten by a non-team member in the
+    same window must still surface -- the bug being fixed: filtering on
+    lastModifier alone would silently drop this edit."""
+    page = _make_page("1", "Shared Page", "/pages/1", author_id="outsider",
+                       author_name="Outsider", when="2026-05-15T12:00:00Z", version_number=2)
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            return _search_resp([page])
+        if url.endswith("/content/1"):
+            expand = params.get("expand")
+            status = params.get("status")
+            if expand == "version" and status == "historical" and params.get("version") == 1:
+                return _version_resp("a1", "Alice", "2026-05-10T09:00:00Z")
+            if expand == "body.storage" and status is None:
+                return _body_resp("<p>Current content after the outsider's later edit landed here.</p>")
+            if expand == "body.storage" and status == "historical" and params.get("version") == 1:
+                return _body_resp("<p>Original content before Alice made her substantive edit.</p>")
+        raise AssertionError(f"unexpected call: {url} {params}")
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
+        items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+
+    assert len(items) == 1
+    assert items[0].author == "Alice"
+    assert items[0].timestamp == datetime(2026, 5, 10, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_fetch_team_pages_no_team_edit_within_window_excluded():
+    """Contributor matched historically, but that edit predates `since` -- the page
+    should not be reported as team activity for this period."""
+    page = _make_page("1", "Old Contribution", "/pages/1", author_id="outsider",
+                       author_name="Outsider", when="2026-05-15T12:00:00Z", version_number=2)
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            return _search_resp([page])
+        if url.endswith("/content/1") and params.get("version") == 1:
+            return _version_resp("a1", "Alice", "2026-04-01T09:00:00Z")  # before SINCE
+        raise AssertionError(f"unexpected call: {url} {params}")
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
+        items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+
+    assert items == []
+
+
+def test_fetch_team_pages_paginates_beyond_first_batch():
+    batch1 = [_make_page(str(i), f"Page {i}") for i in range(50)]
+    batch2 = [_make_page("50", "Page 50")]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            if params["start"] == 0:
+                return _search_resp(batch1)
+            if params["start"] == 50:
+                return _search_resp(batch2)
+            raise AssertionError(f"unexpected start: {params}")
+        if params.get("expand") == "body.storage":
+            return _body_resp(_NEW_PAGE_BODY)
+        raise AssertionError(f"unexpected call: {url} {params}")
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
+        items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+
+    assert len(items) == 51
 
 
 def test_fetch_team_pages_empty_team_ids_no_http_call():
@@ -82,30 +194,40 @@ def test_fetch_team_pages_empty_team_ids_no_http_call():
     mock_get.assert_not_called()
 
 
-def test_fetch_team_pages_truncation_warning():
-    results = [_make_page(str(i), f"Page {i}") for i in range(50)]
-    mock_get = MagicMock(return_value=_search_resp(results, total=80))
-    with patch("digest.sources.mgmt_confluence.requests.get", mock_get):
-        with pytest.warns(RuntimeWarning, match=r"50\+"):
-            fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
-
-
 def test_fetch_team_pages_missing_author_defaults_to_unknown():
-    page = {
-        "id": "1",
-        "title": "Orphan Page",
-        "_links": {"webui": "/pages/1"},
-        "version": {"when": "2026-05-10T09:00:00Z"},
-    }
-    mock_get = MagicMock(return_value=_search_resp([page]))
-    with patch("digest.sources.mgmt_confluence.requests.get", mock_get):
+    page = _make_page("1", "Orphan Page", "/pages/1", author_id="a1", author_name=None)
+    page["version"]["by"] = {"accountId": "a1"}  # no displayName
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=_default_body_get(page)):
         items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
     assert len(items) == 1
     assert items[0].author == "unknown"
 
 
 def test_fetch_team_pages_no_results():
-    mock_get = MagicMock(return_value=_search_resp([]))
-    with patch("digest.sources.mgmt_confluence.requests.get", mock_get):
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            return _search_resp([])
+        raise AssertionError(f"unexpected call: {url} {params}")
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
         items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+    assert items == []
+
+
+def test_fetch_team_pages_cosmetic_only_change_skipped():
+    """A page whose diff is purely cosmetic (short lines) should be dropped, same as
+    the personal digest's page-update handling."""
+    page = _make_page("1", "Typo Fix Page", "/pages/1", version_number=1)
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            return _search_resp([page])
+        if params.get("expand") == "body.storage":
+            return _body_resp("<p>Hi</p>")  # trivially short -> no significant diff vs ""
+        raise AssertionError(f"unexpected call: {url} {params}")
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
+        items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+
     assert items == []

@@ -287,10 +287,17 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
         confluence_items = fetch_team_pages(
             config.atlassian, atlassian_auth, mgmt_cfg, since, until, team_account_ids
         )
-        print(f"  {len(confluence_items)} page(s)")
+        print(f"  {len(confluence_items)} page(s) with team changes")
     except Exception as exc:
         print(f"  WARNING: Confluence fetch failed ({exc.__class__.__name__}: {exc}); skipping.")
         confluence_items = []
+
+    # Reuse the personal digest's per-item LLM summarization so each page (including
+    # brand-new ones, diffed against an empty baseline) gets the same 1-2 sentence
+    # summary and cosmetic-only changes are skipped the same way.
+    if confluence_items:
+        confluence_items = summarize_items(confluence_items, config.llm, language=config.language)
+        print(f"  {len(confluence_items)} page(s) summarized")
     print()
 
     if not jira_items and not confluence_items:

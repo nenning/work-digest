@@ -67,6 +67,19 @@
     .ticket-title a { color: #0f172a; text-decoration: none; font-weight: 500; }
     .ticket-title a:hover { text-decoration: underline; }
     .ticket-meta { font-size: 12px; color: #94a3b8; white-space: nowrap; }
+    .item {
+      border-radius: 6px; padding: 12px 14px; margin-bottom: 10px;
+      background: #f8fafc; border-left: 4px solid #0ea5e9;
+    }
+    .item:last-child { margin-bottom: 0; }
+    .item-title {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+      font-weight: 600; font-size: 14px; margin-bottom: 5px;
+    }
+    .item-title a { color: #0f172a; text-decoration: none; }
+    .item-title a:hover { text-decoration: underline; }
+    .item-meta { font-size: 11px; font-weight: 500; color: #94a3b8; white-space: nowrap; }
+    .item-summary { font-size: 13px; color: #475569; line-height: 1.5; margin: 0; }
     .notices { padding: 0 28px 4px; }
     .notice {
       display: flex; gap: 8px; align-items: flex-start;
@@ -157,9 +170,12 @@
           <div class="status-group">
             <div class="status-label">📄 Documentation ({{ confluence_items|length }} page{{ 's' if confluence_items|length != 1 }})</div>
             {% for item in confluence_items %}
-            <div class="ticket-row">
-              <div class="ticket-title"><a href="{{ item.url | safe_url }}">{{ item.title }}</a></div>
-              <div class="ticket-meta">{{ item.author }}</div>
+            <div class="item">
+              <div class="item-title">
+                <a href="{{ item.url | safe_url }}">{{ item.title }}</a>
+                <span class="item-meta">{{ item.author }}</span>
+              </div>
+              {% if item.summary %}<p class="item-summary">{{ item.summary }}</p>{% endif %}
             </div>
             {% endfor %}
           </div>

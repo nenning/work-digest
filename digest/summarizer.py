@@ -564,7 +564,7 @@ _MAX_TICKET_DESC_CHARS = 250
 
 def synthesize_mgmt_summary(
     jira_items: "List[SourceItem]",
-    confluence_items: "List[SourceItem]",
+    confluence_items: "List[SummarizedItem]",
     config: LLMConfig,
     label: str,
     assume_done: bool = False,
@@ -599,10 +599,10 @@ def synthesize_mgmt_summary(
             lines.append(f"  … and {len(items) - _MAX_MGMT_TICKETS} more")
         return f"{label_str} ({len(items)} ticket{'s' if len(items) != 1 else ''}):\n" + "\n".join(lines)
 
-    def _fmt_pages(pages: "List[SourceItem]") -> str:
+    def _fmt_pages(pages: "List[SummarizedItem]") -> str:
         if not pages:
             return "Documentation updated (0 pages): —"
-        lines = [f"- {p.title} (by {p.author})" for p in pages]
+        lines = [f"- {p.title} (by {p.author}): {p.summary}" for p in pages]
         return f"Documentation updated ({len(pages)} page{'s' if len(pages) != 1 else ''}):\n" + "\n".join(lines)
 
     if assume_done:

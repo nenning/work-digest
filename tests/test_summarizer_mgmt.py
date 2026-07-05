@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from digest.config import LLMConfig
-from digest.models import SourceItem
+from digest.models import SourceItem, SummarizedItem
 from digest.summarizer import synthesize_mgmt_summary
 
 
@@ -32,13 +32,13 @@ def _make_jira_item(kind="ticket_done", title="TEAM-1: Do the thing",
     )
 
 
-def _make_confluence_item(title="Team Notes") -> SourceItem:
-    return SourceItem(
+def _make_confluence_item(title="Team Notes") -> SummarizedItem:
+    return SummarizedItem(
         source="confluence",
         kind="page_update",
         title=title,
         url="https://example.atlassian.net/wiki/pages/1",
-        content="Page updated by Alice.",
+        summary="Added a new rollout checklist section.",
         author="Alice",
         timestamp=datetime(2026, 5, 10, 9, 0, 0, tzinfo=timezone.utc),
     )
