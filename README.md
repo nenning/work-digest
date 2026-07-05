@@ -122,9 +122,15 @@ If you see an error like `AADSTS90002: Tenant not found`, your organization may 
      client_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
    ```
 
-## First Run
+## Personal Digest Mode
 
-Before scheduling, test the tool manually:
+The default mode: fetches your personal activity — watched Jira tickets, Confluence mentions, Teams messages, Outlook mail — and emails you an HTML digest of what happened since the last run.
+
+### Configuration
+
+Uses the top-level config fields above (`atlassian`, `llm`, `m365`, `schedule`, `email`, `data_dir`). No additional block is required.
+
+### Usage
 
 ```bash
 # Test without sending anything (prints to console)
@@ -133,6 +139,9 @@ python main.py --dry-run
 # Test a single source
 python main.py --dry-run --source jira
 
+# Fetch activity from a custom window instead of since the last run
+python main.py --since 2h
+
 # Normal run
 python main.py
 ```
@@ -140,6 +149,17 @@ python main.py
 **With `m365.enabled: true` (default):** fetches all four sources, sends an HTML email to your Outlook inbox via Graph API, saves timestamp to `~/.digest/state.json`.
 
 **With `m365.enabled: false`:** fetches Jira + Confluence only, opens a pre-composed draft in Outlook Classic for you to review and send. State is saved after the draft is opened.
+
+### What it does
+
+1. Fetches Jira, Confluence, Teams, and Outlook activity in parallel, since the last successful run (or 24 hours ago on first run)
+2. Summarizes each item individually with the configured LLM (`llm_workers` parallel calls, default 4)
+3. Renders the HTML digest template
+4. Delivers it — via Graph API `sendMail` (`m365.enabled: true`) or a local Outlook Classic draft (`m365.enabled: false`)
+
+State is saved to `~/.digest/state.json` after a successful send (skipped on `--dry-run`).
+
+Before scheduling, run through the commands above manually to confirm the tool works end to end.
 
 ## Scheduling with Windows Task Scheduler
 
@@ -222,11 +242,16 @@ Then run with `--dry-run` to see detailed output without sending email.
 
 ## CLI Flags
 
+### Personal Digest Mode
+
 - `python main.py --setup-auth` — Authenticate with M365 (device code flow)
 - `python main.py --dry-run` — Test digest without sending email
 - `python main.py --dry-run --source jira` — Test single source (jira, confluence, teams, outlook)
 - `python main.py --since 2h` — Fetch activity from last 2 hours instead of last run (`2h`, `7d`, `2w` or ISO datetime)
 - `python main.py` — Normal run: fetch, summarize, send email
+
+### Management Summary Mode
+
 - `python main.py --mgmt-summary --sprint current` — Team management summary for the active sprint
 - `python main.py --mgmt-summary --sprint "Sprint 42"` — Team management summary for a named sprint
 - `python main.py --mgmt-summary --sprint "Sprint 42" --assume-done` — Same, treating in-progress as done
