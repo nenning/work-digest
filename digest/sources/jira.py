@@ -1,6 +1,5 @@
 import re
 import requests
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -133,31 +132,42 @@ def _validate_project_keys(keys: list[str]) -> None:
 
 
 def _jql_search(config: AtlassianConfig, auth_header: str, jql: str) -> list:
-    resp = requests.post(
-        f"{config.url}/rest/api/3/search/jql",
-        headers={
-            "Authorization": auth_header,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        json={
-            "jql": jql,
-            "fields": ["summary", "assignee", "reporter", "comment", "status", "priority", "updated", "created", "description", "issuelinks"],
-            "maxResults": 50,
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    issues = data.get("issues", [])
-    if len(issues) >= 50 and data.get("total", 0) > 50:
-        warnings.warn(
-            f"Jira query returned {data['total']} results but only 50 were fetched. "
-            "Some items may be missing from the digest.",
-            RuntimeWarning,
-            stacklevel=3,
+    """Page through /rest/api/3/search/jql via its cursor (nextPageToken), same as
+    mgmt_jira._paginate_jql -- a previous version of this function fetched only the
+    first 50 results and warned instead of paginating, silently dropping the rest.
+    """
+    headers = {
+        "Authorization": auth_header,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    fields = ["summary", "assignee", "reporter", "comment", "status", "priority", "updated", "created", "description", "issuelinks"]
+    all_issues: list = []
+    next_page_token = None
+
+    while True:
+        body: dict = {"jql": jql, "fields": fields, "maxResults": 50}
+        if next_page_token:
+            body["nextPageToken"] = next_page_token
+
+        resp = requests.post(
+            f"{config.url}/rest/api/3/search/jql",
+            headers=headers,
+            json=body,
+            timeout=30,
         )
-    return issues
+        resp.raise_for_status()
+        data = resp.json()
+        batch = data.get("issues", [])
+        all_issues.extend(batch)
+
+        if data.get("isLast", True) or not batch:
+            break
+        next_page_token = data.get("nextPageToken")
+        if not next_page_token:
+            break
+
+    return all_issues
 
 
 def _fetch_issue_changelog(config: AtlassianConfig, auth_header: str, issue_key: str) -> list:

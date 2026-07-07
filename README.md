@@ -276,7 +276,8 @@ Add the `mgmt_summary` block to `config.yaml`:
 mgmt_summary:
   jira_jql: "project = PP"              # required — JQL defining your team's tickets
   jira_board_id: 123                    # required for --sprint; find it in your board URL
-  ignore_users: ["xray-bot"]            # display names to exclude (bots, testers, etc.)
+  ignore_users: ["xray-bot"]            # display names to exclude — applies to Jira tickets
+                                         # (assignee and reporter) and to Confluence page edits
   ignore_issue_types:                   # issue types to skip entirely
     - "Xray Test"
     - "Test Plan"
@@ -309,10 +310,10 @@ python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29
 
 ### What it does
 
-1. Fetches all Jira tickets matching `mgmt_summary.jira_jql` for the given time range or sprint
-2. Collects team members from ticket assignees/reporters
-3. Fetches Confluence pages updated by those team members in the same window
-4. Filters out ignored users and issue types
+1. Fetches all Jira tickets matching `mgmt_summary.jira_jql` for the given time range or sprint, filtering out ignored users (checked on both assignee and reporter) and ignored issue types
+2. Collects team members from the remaining tickets' assignees/reporters
+3. Fetches Confluence pages those team members edited in the same window, scoped to `atlassian.confluence_spaces`; edits by an ignored user are excluded here too
+4. For each page, diffs the version confirmed within the window against its pre-window baseline (or against nothing for a brand-new page) — never against whatever is live on the page after the window ends — and credits every team member who edited it in-window, not just one
 5. Makes a single LLM call to produce a 2–3 paragraph management narrative
 6. Sends an HTML email with the narrative and a supporting ticket table
 

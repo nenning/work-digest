@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 from digest.config import AtlassianConfig
 from digest.sources.jira import (
     fetch, _extract_text, _display_name, _parse_dt, _append_extra, _has_mention,
-    _merge_field_changes,
+    _merge_field_changes, _jql_search,
 )
 
 
@@ -778,3 +778,23 @@ def test_status_change_not_to_done_no_unblocks():
         items = fetch(make_config(), "Basic xxx", SINCE)
 
     assert "unblocks" not in _status_change_item(items)
+
+
+def test_jql_search_paginates_via_next_page_token():
+    """A previous version of _jql_search fetched only the first 50 results and
+    warned instead of paginating, silently dropping the rest -- mgmt_jira.py's
+    _paginate_jql already did this correctly for the same endpoint via
+    nextPageToken/isLast, so this must follow the same pagination."""
+    page1 = {"issues": [{"key": f"PROJ-{i}"} for i in range(50)], "isLast": False, "nextPageToken": "tok1"}
+    page2 = {"issues": [{"key": "PROJ-50"}], "isLast": True}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        resp.json.return_value = page2 if (json or {}).get("nextPageToken") == "tok1" else page1
+        return resp
+
+    with patch("digest.sources.jira.requests.post", side_effect=fake_post):
+        issues = _jql_search(make_config(), "Basic xxx", "project = PROJ")
+
+    assert len(issues) == 51

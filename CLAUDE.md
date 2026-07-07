@@ -27,6 +27,9 @@ python digest/main.py --dry-run --source jira   # jira | confluence | teams | ou
 # Override time window (h/d/w suffixes supported)
 python digest/main.py --since 24h
 
+# Verbose diagnostics (HTTP wire log + per-item timing) — combine with any other flags
+python digest/main.py --dry-run --verbose
+
 # Management summary mode
 python digest/main.py --mgmt-summary --sprint current --dry-run
 python digest/main.py --mgmt-summary --sprint "Sprint 42" --dry-run
@@ -62,15 +65,29 @@ digest/sources/
                         via GET /issue/{key}/changelog; detects @mentions in ADF;
                         per-ticket priority: mentions > comments/desc changes > field changes;
                         field changes merged to initial→final state (net-zero dropped);
-                        new tickets via separate JQL query
-  confluence.py         Mentions + page updates (CQL); deduplicates per page
+                        new tickets via separate JQL query; JQL search paginates via
+                        nextPageToken/isLast (POST /rest/api/3/search/jql)
+  confluence.py         Mentions + page updates (CQL); deduplicates per page; CQL search
+                        paginates via `_links.next` cursor (Confluence Cloud ignores a
+                        client-incremented `start` past page 1 — verified against a live
+                        instance that start=0/50/100 all return the same first page)
   teams.py              Channel messages + DMs via Graph API
   outlook.py            Inbox messages via Graph API
-  mgmt_jira.py          Management summary: paginated team ticket fetch; sprint lookup via
-                        GET /rest/agile/1.0/board/{id}/sprint; kinds: ticket_done/wip/todo
+  mgmt_jira.py          Management summary: paginated team ticket fetch (nextPageToken); sprint
+                        lookup via GET /rest/agile/1.0/board/{id}/sprint; kinds: ticket_done/wip/todo;
+                        ignore_users is checked against both assignee and reporter so an ignored
+                        account never enters team_account_ids
   mgmt_confluence.py    Management summary: pages filtered by team accountIds (CQL contributor in,
-                        plus a version-history walk to attribute the actual in-window edit —
-                        `lastModifier` alone would miss a team edit later overwritten by someone else)
+                        scoped to `confluence_spaces` — unscoped, this CQL clause scans the whole
+                        instance and is slow enough to look like a hang on a wide --since range),
+                        paginated via `_links.next` (same cursor scheme as confluence.py) with a
+                        200-page safety cap. A single version-history walk (`_walk_version_history`)
+                        collects every distinct team author who edited the page within the window
+                        (not just the first one found) and locates the pre-window baseline version
+                        in the same pass; ignore_users is applied here too. The diff is computed
+                        against the CQL-verified version (lastModified <= until) fetched explicitly
+                        by version number, not the page's current live body — otherwise a report
+                        over a past window (--sprint, --to) could pick up edits made after `until`.
 digest/templates/
   digest.html.j2        Inline-CSS responsive HTML email template
   mgmt_summary.html.j2  Management summary template: narrative block + supporting ticket table
@@ -90,8 +107,9 @@ State is only written on a successful personal digest send, never on `--dry-run`
 - **Fallback model:** If the primary LLM call fails, `summarizer.py` retries with `fallback_model` if configured.
 - **Outlook priority:** Outlook items are classified as `action_needed / meeting_invite / fyi / info` and color-coded in the HTML template.
 - **URL safety:** `email_sender.py` allows only `http`/`https` URLs to prevent `javascript:` injection.
-- **Management summary:** `--mgmt-summary` mode fetches all team tickets via a configurable `mgmt_summary.jira_jql`, derives team members from assignee/reporter accountIds, fetches Confluence pages contributed to by those accountIds (CQL `contributor in (...)`, version-history walk to find the in-window team edit and diff it against the pre-window baseline — or against "" for brand-new pages). Each page's diff is summarized in 1-2 sentences via `summarizer.summarize_items()` (identical to personal digest page-update handling, including the cosmetic-only skip). Jira tickets are NOT individually summarized. A final single free-text LLM call (`synthesize_mgmt_summary()`) produces a 2–3 paragraph narrative from the ticket lists and the per-page summaries. The `--assume-done` flag instructs the LLM to present in-progress and todo tickets as completed.
+- **Management summary:** `--mgmt-summary` mode fetches all team tickets via a configurable `mgmt_summary.jira_jql`, derives team members from assignee/reporter accountIds (skipping ignored users on either field), fetches Confluence pages contributed to by those accountIds (CQL `contributor in (...)`, scoped to `confluence_spaces`, version-history walk to credit every team author who edited within the window and diff the CQL-verified version against the pre-window baseline — or against "" for brand-new pages). A page's `author` field is a comma-joined list when multiple team members edited it. Each page's diff is summarized in 1-2 sentences via `summarizer.summarize_items()` (identical to personal digest page-update handling, including the cosmetic-only skip). Jira tickets are NOT individually summarized. A final single free-text LLM call (`synthesize_mgmt_summary()`) produces a 2–3 paragraph narrative from the ticket lists and the per-page summaries. The `--assume-done` flag instructs the LLM to present in-progress and todo tickets as completed.
 - **Sprint lookup:** Paginates `GET /rest/agile/1.0/board/{boardId}/sprint` with case-insensitive name match. Requires `mgmt_summary.jira_board_id` in config.
+- **Verbose diagnostics:** `--verbose` sets logging to DEBUG, enables raw HTTP wire logging (`http.client.HTTPConnection.debuglevel = 1`) and urllib3 debug logging, and turns on per-page timing/progress logs in `mgmt_confluence.py`. Added after a management-summary hang turned out to be Confluence Cloud's CQL search silently ignoring a client-incremented `start` past page 1.
 
 ## Configuration
 
