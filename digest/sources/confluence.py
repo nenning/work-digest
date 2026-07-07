@@ -3,7 +3,6 @@ import html
 import difflib
 import logging
 import re
-import warnings
 import requests
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -50,24 +49,34 @@ def _get_account_id(config: AtlassianConfig, auth_header: str) -> str:
     return resp.json()["accountId"]
 
 
+_PAGE_SIZE = 50
+_MAX_SEARCH_PAGES = 200  # safety net: 200 * _PAGE_SIZE = 10,000 results
+
+
 def _cql_search(config: AtlassianConfig, auth_header: str, cql: str) -> list:
-    resp = requests.get(
-        f"{config.url}/wiki/rest/api/content/search",
-        headers={"Authorization": auth_header, "Accept": "application/json"},
-        params={"cql": cql, "expand": "history,version,ancestors", "limit": 50},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    results = data.get("results", [])
-    total = data.get("totalSize", 0)
-    if len(results) >= 50 and total > 50:
-        warnings.warn(
-            f"Confluence CQL returned 50+ results (total={total}); "
-            "some items may be missing. Consider narrowing your space list or time window.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
+    """Page through CQL search results, following `_links.next`.
+
+    Confluence Cloud's CQL search paginates via an opaque cursor in `_links.next`,
+    not a client-incremented `start` -- see mgmt_confluence._search_all for the
+    same fix and the live-API evidence. A previous version of this function fetched
+    only the first page and warned if more existed, silently dropping the rest.
+    """
+    headers = {"Authorization": auth_header, "Accept": "application/json"}
+    url = f"{config.url}/wiki/rest/api/content/search"
+    params = {"cql": cql, "expand": "history,version,ancestors", "limit": _PAGE_SIZE}
+    results: list = []
+    for _ in range(_MAX_SEARCH_PAGES):
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        results.extend(data.get("results", []))
+
+        next_link = (data.get("_links") or {}).get("next")
+        if not next_link:
+            return results
+        url = data["_links"]["base"] + next_link
+        params = None  # the next link already encodes cql/expand/limit/cursor
+    log.warning("Confluence search hit the %d-page safety cap; results may be incomplete", _MAX_SEARCH_PAGES)
     return results
 
 

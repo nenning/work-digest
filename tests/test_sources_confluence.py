@@ -1,5 +1,4 @@
 import pytest
-import warnings
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from digest.config import AtlassianConfig
@@ -146,19 +145,29 @@ def test_valid_space_keys_pass():
     _validate_space_keys(["ENG", "DOC2", "A1"])  # no exception
 
 
-def test_truncation_warning(recwarn):
-    fifty_pages = [dict(PAGE, title=f"Page {i}") for i in range(50)]
+def test_page_updates_paginates_via_cursor_link():
+    """Confluence's CQL search paginates via an opaque `_links.next` cursor, not a
+    client-incremented `start` (see mgmt_confluence._search_all for the live-API
+    evidence) -- a page of results followed by `_links.next` must not be treated
+    as the end, or results past the first 50 are silently dropped."""
+    base = "https://example.atlassian.net/wiki"
+    batch1 = [dict(PAGE, id=f"page-{i}", title=f"Page {i}", _links={"webui": f"/spaces/ENG/pages/{i}"}) for i in range(50)]
+    batch2 = [dict(PAGE, id="page-50", title="Page 50", _links={"webui": "/spaces/ENG/pages/50"})]
+
     responses = [
-        make_mock({"accountId": "user-abc"}),
-        make_mock({"results": [], "totalSize": 0}),                # mentions
-        make_mock({"results": fifty_pages, "totalSize": 75}),      # page updates
+        make_mock({"accountId": "user-abc"}),                                          # /wiki/rest/api/user/current
+        make_mock({"results": []}),                                                    # mentions CQL
+        make_mock({                                                                    # page updates CQL, page 1
+            "results": batch1,
+            "_links": {"base": base, "next": "/rest/api/content/search?next=true&cursor=abc"},
+        }),
+        make_mock({"results": batch2}),                                                # page updates CQL, page 2 (last)
     ]
-    # Patch _fetch_page_diff so we don't need 100 extra mock responses
     with patch("digest.sources.confluence.requests.get", side_effect=responses), \
          patch("digest.sources.confluence._fetch_page_diff", return_value="Added: something significant"):
-        fetch(make_config(), "Basic xxx", SINCE)
-    warning_messages = [str(w.message) for w in recwarn.list if issubclass(w.category, RuntimeWarning)]
-    assert any("50+" in msg for msg in warning_messages)
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    assert len(items) == 51
 
 
 def test_compute_diff_returns_none_for_identical():

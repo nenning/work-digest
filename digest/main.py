@@ -92,11 +92,6 @@ def _print_timing(t_fetch: float, t_sum: float, t_del: float, n_fetched: int, n_
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
     parser = argparse.ArgumentParser(description="Work digest CLI")
     parser.add_argument(
         "--setup-auth",
@@ -161,7 +156,24 @@ def main() -> None:
         action="store_true",
         help="In management summary: produce a very short executive bullet list instead of paragraphs",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Log every HTTP request/response (method, URL, timing) to find where a fetch is slow or stuck",
+    )
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    if args.verbose:
+        # http.client logs the raw request line and response status as they happen,
+        # which is what actually shows which request a hang is stuck in -- urllib3's
+        # own debug logging only logs after a request completes.
+        import http.client
+        http.client.HTTPConnection.debuglevel = 1
+        logging.getLogger("urllib3").setLevel(logging.DEBUG)
 
     # Load config.yaml from the same directory as main.py so it works regardless of CWD.
     # This ensures Task Scheduler can invoke `python path\to\main.py` without needing to

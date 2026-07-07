@@ -117,13 +117,18 @@ def fetch_team_tickets(
         assignee_id = assignee.get("accountId", "")
         reporter_id = reporter.get("accountId", "")
         assignee_name = assignee.get("displayName") or "Unassigned"
+        reporter_name = reporter.get("displayName") or ""
 
         if assignee_name.lower() in ignore_names:
             continue
 
         if assignee_id:
             team_account_ids.add(assignee_id)
-        if reporter_id:
+        # Checked independently of the assignee -- a ticket reported (but not
+        # assigned) by an ignored bot/tester must not leak that account into
+        # team_account_ids, or their Confluence edits resurface via the
+        # "contributor in (...)" query in mgmt_confluence.py.
+        if reporter_id and reporter_name.lower() not in ignore_names:
             team_account_ids.add(reporter_id)
 
         status = fields.get("status") or {}

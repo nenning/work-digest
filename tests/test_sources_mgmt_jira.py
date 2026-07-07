@@ -54,7 +54,7 @@ def _search_resp(issues, is_last=True, next_page_token=None):
 
 def _make_issue(key="TEAM-1", summary="Do the thing", status_name="In Progress",
                 status_key="indeterminate", assignee_id="a1", assignee_name="Alice",
-                reporter_id="r1", issue_type="Story", description=None):
+                reporter_id="r1", reporter_name="Reporter", issue_type="Story", description=None):
     return {
         "key": key,
         "fields": {
@@ -64,7 +64,7 @@ def _make_issue(key="TEAM-1", summary="Do the thing", status_name="In Progress",
                 "statusCategory": {"key": status_key},
             },
             "assignee": {"accountId": assignee_id, "displayName": assignee_name},
-            "reporter": {"accountId": reporter_id, "displayName": "Reporter"},
+            "reporter": {"accountId": reporter_id, "displayName": reporter_name},
             "issuetype": {"name": issue_type},
             "description": description,
             "updated": "2026-05-10T09:00:00Z",
@@ -187,6 +187,23 @@ def test_fetch_team_tickets_ignore_user():
         items, _ = fetch_team_tickets(make_atlassian_config(), AUTH, cfg, SINCE, UNTIL)
     assert len(items) == 1
     assert items[0].title.startswith("TEAM-2")
+
+
+def test_fetch_team_tickets_ignore_user_excluded_as_reporter_too():
+    """An ignored user must not leak into team_account_ids via the reporter field
+    just because they aren't the assignee -- team_account_ids feeds the Confluence
+    'contributor in (...)' query, so a leaked bot/tester account resurfaces there."""
+    issues = [
+        _make_issue("TEAM-1", assignee_id="a1", assignee_name="Alice",
+                    reporter_id="bot1", reporter_name="Bot User"),
+    ]
+    mock_post = MagicMock(return_value=_search_resp(issues))
+    cfg = make_mgmt_cfg(ignore_users=["Bot User"])
+    with patch("digest.sources.mgmt_jira.requests.post", mock_post):
+        items, account_ids = fetch_team_tickets(make_atlassian_config(), AUTH, cfg, SINCE, UNTIL)
+    assert len(items) == 1  # ticket itself is kept -- assignee isn't ignored
+    assert "a1" in account_ids
+    assert "bot1" not in account_ids
 
 
 def test_fetch_team_tickets_ignore_issue_type():

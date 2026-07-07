@@ -229,18 +229,22 @@ schtasks /delete /tn "WorkDigest-08-00" /f
 
 ### Debug Mode
 
-Enable verbose logging by editing the line in `main.py` that sets up logging:
+Add `--verbose` to any command to see exactly what's happening under the hood — useful when a fetch is slow, stuck, or erroring silently:
 
-```python
-logging.basicConfig(
-    level=logging.DEBUG,  # Change from INFO to DEBUG
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+```bash
+python main.py --dry-run --verbose
+python main.py --mgmt-summary --since 21d --dry-run --verbose
 ```
 
-Then run with `--dry-run` to see detailed output without sending email.
+This logs every HTTP request and response as it happens (method, URL, timing), plus per-item progress (e.g. which Confluence page is currently being resolved). If a run hangs, the last logged request tells you exactly where it's stuck.
+
+Combine with `--dry-run` to see detailed output without sending email.
 
 ## CLI Flags
+
+### Global
+
+- `python main.py --verbose` — Log every HTTP request/response (method, URL, timing) and per-item progress; combine with any other flags to debug a slow or stuck run
 
 ### Personal Digest Mode
 
