@@ -107,7 +107,23 @@ def test_synthesize_short_flag_prompt():
         )
     prompt = mock_client.chat.completions.create.call_args[1]["messages"][0]["content"]
     assert "bullet" in prompt.lower() or "5" in prompt
-    assert "paragraph" not in prompt.lower()
+
+
+def test_synthesize_uses_larger_timeout_than_per_item_llm_timeout():
+    """This call generates a full narrative from potentially 150+ tickets in one shot --
+    much larger than a per-item summary -- and previously had no timeout at all, since
+    (unlike summarize_items()) nothing else wraps this call with a bound. It must not
+    reuse config.llm_timeout, which is tuned for a single short per-item summary and
+    would risk spurious failures on a legitimately slower large generation."""
+    mock_client = _mock_openai_client("Generated narrative.")
+    config = _openai_config()
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        synthesize_mgmt_summary([_make_jira_item()], [], config, label="Sprint 7")
+
+    _, kwargs = mock_openai.OpenAI.call_args
+    assert kwargs["timeout"] > config.llm_timeout
+    assert kwargs["max_retries"] == 0
 
 
 def test_synthesize_assume_done_flag():

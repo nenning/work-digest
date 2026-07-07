@@ -93,6 +93,32 @@ def test_smtp_dry_run_sends_preview_to_sender(capsys):
     assert "DRY RUN" in capsys.readouterr().out
 
 
+def test_smtp_connection_has_timeout():
+    """Without an explicit timeout, smtplib.SMTP defaults to no timeout at all --
+    a hung connection (bad host, silent firewall drop) blocks forever."""
+    item = _make_item()
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    smtp_cfg = SmtpConfig(host="smtp.example.com", username="sender@example.com")
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp) as mock_smtp_class,
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        send_via_smtp(
+            items=[item],
+            config=_default_config(),
+            smtp_cfg=smtp_cfg,
+            recipient="boss@example.com",
+            dry_run=True,
+            now=_FIXED_NOW,
+        )
+
+    _, kwargs = mock_smtp_class.call_args
+    assert kwargs.get("timeout") is not None
+
+
 # ---------------------------------------------------------------------------
 # send_via_smtp: connects, authenticates, and sends
 # ---------------------------------------------------------------------------

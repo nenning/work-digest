@@ -475,6 +475,51 @@ def test_assignment_items_are_ignored():
     assert results[0].kind == "comment"
 
 
+def test_openai_client_gets_timeout_and_no_sdk_retries():
+    """Without an explicit timeout the SDK default is no timeout at all, so a hung
+    endpoint blocks forever -- and the SDK's own retries would replay against the
+    same model when our caller already fails over to the next configured model."""
+    item = _make_item(source="jira", content="A" * 200)
+    config = _openai_config()
+
+    mock_message = MagicMock()
+    mock_message.content = json.dumps({"summary": "ok"})
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_response
+
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        summarize_items([item], config)
+
+    _, kwargs = mock_openai.OpenAI.call_args
+    assert kwargs["timeout"] == config.llm_timeout
+    assert kwargs["max_retries"] == 0
+
+
+def test_anthropic_client_gets_timeout_and_no_sdk_retries():
+    item = _make_item(source="jira", content="A" * 200)
+    config = _anthropic_config()
+
+    mock_message = MagicMock()
+    mock_message.text = json.dumps({"summary": "ok"})
+    mock_response = MagicMock()
+    mock_response.content = [mock_message]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_response
+
+    with patch("digest.summarizer.anthropic") as mock_anthropic:
+        mock_anthropic.Anthropic.return_value = mock_client
+        summarize_items([item], config)
+
+    _, kwargs = mock_anthropic.Anthropic.call_args
+    assert kwargs["timeout"] == config.llm_timeout
+    assert kwargs["max_retries"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Test 14: field_change unblocks note rendered as safe HTML link
 # ---------------------------------------------------------------------------

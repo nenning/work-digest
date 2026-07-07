@@ -32,6 +32,7 @@ def get_token(tenant_id: str, cache_file: Path, client_id: str | None = None) ->
         effective_client_id,
         authority=f"https://login.microsoftonline.com/{tenant_id}",
         token_cache=cache,
+        timeout=30,  # msal defaults to no timeout at all (blocks forever on a network hang)
     )
 
     accounts = app.get_accounts()

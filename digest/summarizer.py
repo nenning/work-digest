@@ -157,8 +157,8 @@ def _build_prompt(item: SourceItem, language: str = "de") -> str:
 def _call_llm(prompt: str, config: LLMConfig, model: str) -> str:
     """Call the configured LLM with the given model and return the raw response text."""
     if config.provider in ("openai", "azure_openai"):
-        return _call_openai(prompt, config, model, json_mode=True)
-    return _call_anthropic(prompt, config, model)
+        return _call_openai(prompt, config, model, config.llm_timeout, json_mode=True)
+    return _call_anthropic(prompt, config, model, config.llm_timeout)
 
 
 def _call_llm_timed(prompt: str, config: LLMConfig, model: str) -> tuple[str, float]:
@@ -188,15 +188,23 @@ def _call_llm_timed(prompt: str, config: LLMConfig, model: str) -> tuple[str, fl
     return result[0], elapsed[0]
 
 
-def _call_openai(prompt: str, config: LLMConfig, model: str, json_mode: bool = True) -> str:
+def _call_openai(prompt: str, config: LLMConfig, model: str, timeout: float, json_mode: bool = True) -> str:
+    # timeout: without it the SDK defaults to no timeout at all, so a hung endpoint blocks
+    # forever. Callers pass a value sized for what they're waiting on -- config.llm_timeout
+    # (tuned for a short per-item summary) would be too tight for synthesize_mgmt_summary()'s
+    # single, much larger narrative call, which previously had no timeout bound at all.
+    # max_retries=0: the SDK's own transient-error retries would replay against the same
+    # model; our callers already fail over to the next configured model instead.
     if config.provider == "azure_openai":
         client = openai.AzureOpenAI(
             api_key=config.api_key,
             azure_endpoint=config.endpoint,
             api_version="2024-02-01",
+            timeout=timeout,
+            max_retries=0,
         )
     else:
-        kwargs: dict = {"api_key": config.api_key}
+        kwargs: dict = {"api_key": config.api_key, "timeout": timeout, "max_retries": 0}
         if config.endpoint:
             kwargs["base_url"] = config.endpoint
         client = openai.OpenAI(**kwargs)
@@ -214,8 +222,8 @@ def _call_openai(prompt: str, config: LLMConfig, model: str, json_mode: bool = T
     return response.choices[0].message.content
 
 
-def _call_anthropic(prompt: str, config: LLMConfig, model: str, max_tokens: int = 500) -> str:
-    kwargs: dict = {"api_key": config.api_key}
+def _call_anthropic(prompt: str, config: LLMConfig, model: str, timeout: float, max_tokens: int = 500) -> str:
+    kwargs: dict = {"api_key": config.api_key, "timeout": timeout, "max_retries": 0}
     if config.endpoint:
         kwargs["base_url"] = config.endpoint
     client = anthropic.Anthropic(**kwargs)
@@ -657,14 +665,20 @@ def synthesize_mgmt_summary(
             f"Write only the narrative. No headers, no bullet points, no ticket IDs."
         )
 
+    # This single call generates a full 2-3 paragraph narrative from potentially 150+
+    # tickets -- much larger than a per-item summary, so it gets more headroom than
+    # config.llm_timeout. Previously uncapped entirely: a hung endpoint blocked forever
+    # with no other timeout mechanism wrapping this call (unlike summarize_items()).
+    _SYNTHESIS_TIMEOUT = max(config.llm_timeout * 3, 90)
+
     errors: list = []
     for model in config.models + config.fallback_models:
         try:
             log.info("Synthesizing management summary with model %s...", model)
             if config.provider in ("openai", "azure_openai"):
-                return _call_openai(prompt, config, model, json_mode=False)
+                return _call_openai(prompt, config, model, _SYNTHESIS_TIMEOUT, json_mode=False)
             else:
-                return _call_anthropic(prompt, config, model, max_tokens=1500)
+                return _call_anthropic(prompt, config, model, _SYNTHESIS_TIMEOUT, max_tokens=1500)
         except Exception as exc:
             errors.append(f"{model}: {exc}")
             log.warning("Model %s failed for synthesis: %s", model, exc)

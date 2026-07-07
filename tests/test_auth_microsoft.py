@@ -19,6 +19,22 @@ def test_uses_cached_token(tmp_path):
     mock_app.acquire_token_silent.assert_called_once_with(SCOPES, account={"username": "user@example.com"})
 
 
+def test_public_client_application_has_timeout(tmp_path):
+    """msal defaults to no timeout at all, so a hung network call (e.g. during the
+    silent token refresh that runs on every scheduled digest run) blocks forever."""
+    cache_file = tmp_path / "token_cache.bin"
+
+    mock_app = MagicMock()
+    mock_app.get_accounts.return_value = [{"username": "user@example.com"}]
+    mock_app.acquire_token_silent.return_value = {"access_token": "cached_token_123"}
+
+    with patch("digest.auth.microsoft.msal.PublicClientApplication", return_value=mock_app) as mock_pca:
+        get_token("organizations", cache_file)
+
+    _, kwargs = mock_pca.call_args
+    assert kwargs.get("timeout") is not None
+
+
 def test_falls_back_to_device_flow(tmp_path):
     cache_file = tmp_path / "token_cache.bin"
 

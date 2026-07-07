@@ -204,7 +204,7 @@ def _smtp_send(
             )
 
     try:
-        with smtplib.SMTP(smtp_cfg.host, smtp_cfg.port) as server:
+        with smtplib.SMTP(smtp_cfg.host, smtp_cfg.port, timeout=30) as server:
             if smtp_cfg.use_tls:
                 server.starttls()
             if smtp_cfg.use_oauth2:
