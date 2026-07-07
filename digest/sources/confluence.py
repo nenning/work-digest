@@ -53,7 +53,7 @@ _PAGE_SIZE = 50
 _MAX_SEARCH_PAGES = 200  # safety net: 200 * _PAGE_SIZE = 10,000 results
 
 
-def _cql_search(config: AtlassianConfig, auth_header: str, cql: str) -> list:
+def _cql_search(config: AtlassianConfig, auth_header: str, cql: str, expand: str = "history,version,ancestors") -> list:
     """Page through CQL search results, following `_links.next`.
 
     Confluence Cloud's CQL search paginates via an opaque cursor in `_links.next`,
@@ -63,7 +63,7 @@ def _cql_search(config: AtlassianConfig, auth_header: str, cql: str) -> list:
     """
     headers = {"Authorization": auth_header, "Accept": "application/json"}
     url = f"{config.url}/wiki/rest/api/content/search"
-    params = {"cql": cql, "expand": "history,version,ancestors", "limit": _PAGE_SIZE}
+    params = {"cql": cql, "expand": expand, "limit": _PAGE_SIZE}
     results: list = []
     for _ in range(_MAX_SEARCH_PAGES):
         resp = requests.get(url, headers=headers, params=params, timeout=30)
@@ -125,7 +125,11 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
         return []
     spaces = " OR ".join(f'space = "{s}"' for s in config.confluence_spaces)
     cql = f'({spaces}) AND type = page AND lastModified > "{since_cql}"'
-    results = _cql_search(config, auth_header, cql)
+    # Every result here already fell inside the window (lastModified > since), so unlike
+    # mgmt_confluence.py's broad "contributor ever" search, there's no later filtering step
+    # that would discard most matches -- fetching the current body alongside the search
+    # avoids a guaranteed follow-up GET per page instead of speculatively pre-fetching.
+    results = _cql_search(config, auth_header, cql, expand="history,version,ancestors,body.storage")
 
     if not results:
         return []
@@ -133,7 +137,8 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
     def _fetch_one(r: dict) -> Optional[SourceItem]:
         page_id = r["id"]
         version_num = r.get("version", {}).get("number", 1)
-        diff = _fetch_page_diff(config, auth_header, page_id, version_num, since)
+        current_body = r.get("body", {}).get("storage", {}).get("value", "")
+        diff = _fetch_page_diff(config, auth_header, page_id, version_num, since, current_body)
         if diff is None:
             return None
         return SourceItem(
@@ -159,9 +164,10 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
 
 
 def _fetch_page_diff(
-    config: AtlassianConfig, auth_header: str, page_id: str, version_num: int, since: datetime
+    config: AtlassianConfig, auth_header: str, page_id: str, version_num: int, since: datetime, current_body: str
 ) -> Optional[str]:
-    """Fetch current and baseline version bodies; return a text diff or None if trivial.
+    """Diff the already-fetched current body against the baseline version; return a
+    text diff or None if trivial.
 
     Baseline is the most recent version whose timestamp is <= since, ensuring the diff
     covers all edits in the window even when a page was edited multiple times.
@@ -194,15 +200,6 @@ def _fetch_page_diff(
         return None  # page created entirely within the window; no pre-window baseline
 
     try:
-        curr = requests.get(
-            f"{config.url}/wiki/rest/api/content/{page_id}",
-            headers=headers,
-            params={"expand": "body.storage"},
-            timeout=30,
-        )
-        curr.raise_for_status()
-        curr_body = curr.json().get("body", {}).get("storage", {}).get("value", "")
-
         prev = requests.get(
             f"{config.url}/wiki/rest/api/content/{page_id}",
             headers=headers,
@@ -214,7 +211,7 @@ def _fetch_page_diff(
     except requests.RequestException:
         return None  # gracefully skip if diff fetch fails
 
-    curr_text = _storage_to_text(curr_body)
+    curr_text = _storage_to_text(current_body)
     prev_text = _storage_to_text(prev_body)
     return _compute_diff(prev_text, curr_text)
 

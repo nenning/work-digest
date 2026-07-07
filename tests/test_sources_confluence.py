@@ -12,9 +12,9 @@ PAGE = {
     "_links": {"webui": "/spaces/ENG/pages/123"},
     "history": {"createdBy": {"displayName": "Anna"}, "createdDate": "2026-04-09T08:00:00Z"},
     "version": {"number": 3, "by": {"displayName": "Anna"}, "when": "2026-04-09T08:00:00Z"},
+    "body": {"storage": {"value": "<p>New section about deployment pipeline.</p>"}},
 }
 
-CURR_BODY = {"body": {"storage": {"value": "<p>New section about deployment pipeline.</p>"}}}
 PREV_BODY = {"body": {"storage": {"value": "<p>Old draft content here.</p>"}}}
 
 
@@ -37,9 +37,8 @@ def test_fetch_page_updates():
     responses = [
         make_mock({"accountId": "user-abc"}),                          # /wiki/rest/api/user/current
         make_mock({"results": []}),                                    # mentions CQL
-        make_mock({"results": [PAGE]}),                                # page updates CQL
+        make_mock({"results": [PAGE]}),                                # page updates CQL (body included via expand)
         make_mock({"version": {"when": "2026-04-09T06:00:00Z"}}),     # baseline metadata (v2, before SINCE)
-        make_mock(CURR_BODY),                                          # _fetch_page_diff: current body
         make_mock(PREV_BODY),                                          # _fetch_page_diff: baseline body
     ]
     with patch("digest.sources.confluence.requests.get", side_effect=responses):
@@ -54,12 +53,12 @@ def test_fetch_page_updates():
 
 def test_cosmetic_only_page_skipped():
     """Pages with only trivial changes are excluded from results."""
+    same_content_page = dict(PAGE, body={"storage": {"value": "<p>Same content</p>"}})
     responses = [
         make_mock({"accountId": "user-abc"}),
         make_mock({"results": []}),
-        make_mock({"results": [PAGE]}),
+        make_mock({"results": [same_content_page]}),                         # body included via expand
         make_mock({"version": {"when": "2026-04-09T06:00:00Z"}}),            # baseline metadata (v2, before SINCE)
-        make_mock({"body": {"storage": {"value": "<p>Same content</p>"}}}),  # current body
         make_mock({"body": {"storage": {"value": "<p>Same content</p>"}}}),  # baseline body (identical)
     ]
     with patch("digest.sources.confluence.requests.get", side_effect=responses):
