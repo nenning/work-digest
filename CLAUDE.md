@@ -81,13 +81,19 @@ digest/sources/
                         scoped to `confluence_spaces` — unscoped, this CQL clause scans the whole
                         instance and is slow enough to look like a hang on a wide --since range),
                         paginated via `_links.next` (same cursor scheme as confluence.py) with a
-                        200-page safety cap. A single version-history walk (`_walk_version_history`)
-                        collects every distinct team author who edited the page within the window
-                        (not just the first one found) and locates the pre-window baseline version
-                        in the same pass; ignore_users is applied here too. The diff is computed
-                        against the CQL-verified version (lastModified <= until) fetched explicitly
-                        by version number, not the page's current live body — otherwise a report
-                        over a past window (--sprint, --to) could pick up edits made after `until`.
+                        200-page safety cap. The CQL has no upper `lastModified` bound — that field
+                        reflects the page's *live* latest version, so a page edited again after
+                        `until` (by anyone, team or not) would otherwise drop out of the search
+                        entirely and hide a team edit that happened well inside the window on an
+                        earlier version. A single version-history walk (`_walk_version_history`)
+                        instead resolves the latest version at or before `until` itself (skipping
+                        any later, out-of-window versions), collects every distinct team author who
+                        edited the page within the window (not just the first one found) in the same
+                        pass, and locates the pre-window baseline version; ignore_users is applied
+                        here too. The diff is computed against that resolved in-window version
+                        fetched explicitly by version number, not the page's current live body —
+                        otherwise a report over a past window (--sprint, --to) could pick up edits
+                        made after `until`.
 digest/templates/
   digest.html.j2        Inline-CSS responsive HTML email template
   mgmt_summary.html.j2  Management summary template: narrative block + supporting ticket table
@@ -107,7 +113,7 @@ State is only written on a successful personal digest send, never on `--dry-run`
 - **Fallback model:** If the primary LLM call fails, `summarizer.py` retries with `fallback_model` if configured.
 - **Outlook priority:** Outlook items are classified as `action_needed / meeting_invite / fyi / info` and color-coded in the HTML template.
 - **URL safety:** `email_sender.py` allows only `http`/`https` URLs to prevent `javascript:` injection.
-- **Management summary:** `--mgmt-summary` mode fetches all team tickets via a configurable `mgmt_summary.jira_jql`, derives team members from assignee/reporter accountIds (skipping ignored users on either field), fetches Confluence pages contributed to by those accountIds (CQL `contributor in (...)`, scoped to `confluence_spaces`, version-history walk to credit every team author who edited within the window and diff the CQL-verified version against the pre-window baseline — or against "" for brand-new pages). A page's `author` field is a comma-joined list when multiple team members edited it. Each page's diff is summarized in 1-2 sentences via `summarizer.summarize_items()` (identical to personal digest page-update handling, including the cosmetic-only skip). Jira tickets are NOT individually summarized. A final single free-text LLM call (`synthesize_mgmt_summary()`) produces a 2–3 paragraph narrative from the ticket lists and the per-page summaries. The `--assume-done` flag instructs the LLM to present in-progress and todo tickets as completed.
+- **Management summary:** `--mgmt-summary` mode fetches all team tickets via a configurable `mgmt_summary.jira_jql`, derives team members from assignee/reporter accountIds (skipping ignored users on either field), fetches Confluence pages contributed to by those accountIds (CQL `contributor in (...)`, scoped to `confluence_spaces`, version-history walk to credit every team author who edited within the window and diff the resolved in-window version against the pre-window baseline — or against "" for brand-new pages). A page's `author` field is a comma-joined list when multiple team members edited it. Each page's diff is summarized in 1-2 sentences via `summarizer.summarize_items()` (identical to personal digest page-update handling, including the cosmetic-only skip). Jira tickets are NOT individually summarized. A final single free-text LLM call (`synthesize_mgmt_summary()`) produces a 2–3 paragraph narrative from the ticket lists and the per-page summaries. The `--assume-done` flag instructs the LLM to present in-progress and todo tickets as completed.
 - **Sprint lookup:** Paginates `GET /rest/agile/1.0/board/{boardId}/sprint` with case-insensitive name match. Requires `mgmt_summary.jira_board_id` in config.
 - **Verbose diagnostics:** `--verbose` sets logging to DEBUG, enables raw HTTP wire logging (`http.client.HTTPConnection.debuglevel = 1`) and urllib3 debug logging, and turns on per-page timing/progress logs in `mgmt_confluence.py`. Added after a management-summary hang turned out to be Confluence Cloud's CQL search silently ignoring a client-incremented `start` past page 1.
 - **No unbounded external calls:** every `requests.get/post` call passes `timeout=`. `smtplib.SMTP(...)` and `msal.PublicClientApplication(...)` also get an explicit `timeout` — both default to none at all otherwise, which blocks forever on a hung connection (the M365 silent-refresh path runs on every scheduled run, so this matters even outside `--setup-auth`). The OpenAI/Anthropic clients in `summarizer.py` get `timeout=` (and `max_retries=0`, since callers already fail over to the next configured model rather than wanting the SDK to retry the same one) — `synthesize_mgmt_summary()`'s single large narrative call gets a bigger timeout (`max(llm_timeout * 3, 90)`) than the per-item path's `config.llm_timeout`, since it previously had no timeout at all and reusing the small per-item value risked spurious failures on a legitimately slower large generation.

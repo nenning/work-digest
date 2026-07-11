@@ -37,13 +37,18 @@ def fetch_team_pages(
     ignore_names = {u.lower() for u in (mgmt_cfg.ignore_users or [])}
 
     since_cql = since.strftime("%Y-%m-%d %H:%M")
-    until_cql = until.strftime("%Y-%m-%d %H:%M")
 
     ids_str = ", ".join(f'"{aid}"' for aid in sorted(team_account_ids))
     # "contributor" matches anyone who has ever edited the page, not just the current
     # version's author. This is combined with a version-history walk below so a team
     # member's edit isn't missed just because someone else edited the page again
     # later in the same window ("lastModifier in (...)" alone would miss that case).
+    #
+    # No upper bound on lastModified here (deliberately -- see _walk_version_history):
+    # `lastModified` reflects the page's *live* latest version, so a page edited again
+    # after `until` (by anyone, team or not) would otherwise fail an
+    # `lastModified <= until` clause and drop out of the search entirely, hiding a
+    # team member's edit that happened well inside the window on an earlier version.
     #
     # "contributor in (...)" alone is an expensive, largely unindexed CQL clause --
     # without a space restriction it scans every page in the whole instance before
@@ -53,7 +58,6 @@ def fetch_team_pages(
     cql = (
         f"contributor in ({ids_str}) "
         f"AND lastModified >= \"{since_cql}\" "
-        f"AND lastModified <= \"{until_cql}\" "
         f"AND type = page"
     )
     if config.confluence_spaces:
@@ -76,8 +80,8 @@ def fetch_team_pages(
         current_version = r.get("version") or {}
         version_num = current_version.get("number", 1)
 
-        authors, baseline_version, timestamp = _walk_version_history(
-            config, headers, page_id, current_version, version_num, since, team_account_ids, ignore_names
+        authors, resolved_version, baseline_version, timestamp = _walk_version_history(
+            config, headers, page_id, current_version, version_num, since, until, team_account_ids, ignore_names
         )
         if not authors:
             # contributor matched somewhere in the page's history, but not within
@@ -85,13 +89,13 @@ def fetch_team_pages(
             log.debug("Page %s (%s): no team edit in window (%.1fs)", page_id, title, time.monotonic() - t_page)
             return None
 
-        # Diff the CQL-verified version (lastModified <= until) against the pre-window
-        # baseline (or against "" for a page created within the window, so the whole
-        # page reads as newly added content) -- NOT the page's current live body, which
-        # could include edits made after `until` for a report covering a past window
-        # (e.g. --sprint or --to). Reuses the personal digest's diff logic so downstream
+        # Diff the latest in-window version (<= until, which may be an earlier version
+        # than the page's current live one if it was edited again after the window --
+        # see _walk_version_history) against the pre-window baseline (or against "" for
+        # a page created within the window, so the whole page reads as newly added
+        # content). Reuses the personal digest's diff logic so downstream
         # summarize_items() produces the same kind of 1-2 sentence LLM summary.
-        diff = _diff_against_baseline(config, headers, page_id, version_num, baseline_version)
+        diff = _diff_against_baseline(config, headers, page_id, resolved_version, baseline_version)
         if diff is None:
             log.debug("Page %s (%s): no diff / body fetch failed (%.1fs)", page_id, title, time.monotonic() - t_page)
             return None  # cosmetic-only change, or body fetch failed
@@ -161,16 +165,22 @@ def _walk_version_history(
     current_version: dict,
     version_num: int,
     since: datetime,
+    until: datetime,
     team_account_ids: Set[str],
     ignore_names: Set[str],
-) -> Tuple[List[str], Optional[int], Optional[datetime]]:
-    """Walk a page's version history backward from `version_num`, collecting every
-    team-authored edit after `since` and locating the most recent version at or
-    before `since` to use as the diff baseline.
+) -> Tuple[List[str], Optional[int], Optional[int], Optional[datetime]]:
+    """Walk a page's version history backward from `version_num`, locating the latest
+    version at or before `until` (the "resolved" version to diff), collecting every
+    team-authored edit in (`since`, `until`], and locating the most recent version at
+    or before `since` to use as the diff baseline.
 
-    The CQL search already guarantees `current_version`'s timestamp is <= until, and
-    every earlier version is necessarily earlier still, so nothing here needs an
-    upper-bound check -- only the `since` boundary matters.
+    The CQL search no longer bounds `lastModified <= until` (see fetch_team_pages),
+    so `current_version` -- the page's *live* latest version -- may postdate `until`
+    if someone edited the page again after the window closed. This walk skips such
+    versions (without crediting their authors or using them as the diff target) until
+    it reaches one at or before `until`; that becomes the resolved version. If no
+    version at all falls at or before `until` (the page was entirely created after the
+    window), resolved_version stays None and the page has no team edit in window.
 
     A page with several team members editing it within the window previously
     surfaced only whichever one this walk happened to hit first; now every distinct
@@ -181,8 +191,9 @@ def _walk_version_history(
     with --verbose this shows up as a long run of "checking version N" log lines
     for a single page_id, which looks like a hang but is actually just a busy page.
 
-    Returns (sorted distinct author display names, baseline version number or None
-    if the page was created within the window, latest team-edit timestamp or None).
+    Returns (sorted distinct author display names, resolved version number to diff or
+    None if no version is within the window, baseline version number or None if the
+    page was created within the window, latest team-edit timestamp or None).
     """
     team_authors: dict[str, datetime] = {}
 
@@ -195,7 +206,15 @@ def _walk_version_history(
             if name not in team_authors or when > team_authors[name]:
                 team_authors[name] = when
 
-    _consider(current_version)
+    def _when(version: dict) -> Optional[datetime]:
+        when_str = version.get("when", "")
+        return _parse_dt(when_str) if when_str else None
+
+    resolved_version: Optional[int] = None
+    cur_when = _when(current_version)
+    if cur_when is not None and cur_when <= until:
+        resolved_version = version_num
+        _consider(current_version)
 
     baseline_version: Optional[int] = None
     for v in range(version_num - 1, 0, -1):
@@ -212,16 +231,25 @@ def _walk_version_history(
         except requests.RequestException:
             break
 
-        when_str = version.get("when", "")
-        when = _parse_dt(when_str) if when_str else None
-        if when is not None and when <= since:
+        when = _when(version)
+        if when is None:
+            continue
+
+        if resolved_version is None:
+            if when > until:
+                # still postdates the window (page kept being edited after `until`) --
+                # keep walking back without crediting this author or diffing it.
+                continue
+            resolved_version = v
+
+        if when <= since:
             baseline_version = v
             break
 
         _consider(version)
 
     latest_timestamp = max(team_authors.values()) if team_authors else None
-    return sorted(team_authors), baseline_version, latest_timestamp
+    return sorted(team_authors), resolved_version, baseline_version, latest_timestamp
 
 
 def _diff_against_baseline(
@@ -229,12 +257,14 @@ def _diff_against_baseline(
 ) -> Optional[str]:
     """Diff the page's pre-window baseline against its state at `version_num`.
 
-    `version_num` is the CQL-verified version (lastModified <= until), fetched
+    `version_num` here is the resolved in-window version number found by
+    _walk_version_history (the latest version at or before `until`), fetched
     explicitly by number rather than as the page's current live body -- otherwise a
     report covering a past window (e.g. --sprint or --to) would pick up edits made
-    after `until` but before the report actually ran. If the page was created within
-    the window (no version predates `since`), the baseline is treated as empty so
-    the entire page shows up as newly added content.
+    after `until`, whether from the report running late or the page being edited
+    again post-window. If the page was created within the window (no version
+    predates `since`), the baseline is treated as empty so the entire page shows up
+    as newly added content.
     """
     try:
         curr = requests.get(

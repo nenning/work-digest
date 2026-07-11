@@ -211,6 +211,46 @@ def test_fetch_team_pages_diff_pinned_to_cql_verified_version_not_live_body():
     assert "rollout plan" in items[0].content
 
 
+def test_fetch_team_pages_edited_again_after_until_still_surfaces_in_window_edit():
+    """Regression test: a page's *live* lastModified can postdate `until` if someone
+    edits it again after the window closes (even a non-team or ignore_users author).
+    The CQL search must not filter on an upper lastModified bound, and the version
+    walk must skip past those post-window versions to find the team edit that
+    actually happened inside [since, until] -- the real-world bug being fixed."""
+    page = _make_page("1", "Skizze", "/pages/1", author_id="ignored-bot", author_name="Ignored Bot",
+                       when="2026-06-05T08:00:00Z", version_number=3)
+    cfg = make_mgmt_cfg(ignore_users=["Ignored Bot"])
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            return _search_resp([page])
+        if url.endswith("/content/1"):
+            expand = params.get("expand")
+            status = params.get("status")
+            version = params.get("version")
+            # version 2: Alice's edit, inside the window
+            if expand == "version" and status == "historical" and version == 2:
+                return _version_resp("a1", "Alice", "2026-05-15T09:00:00Z")
+            # version 1: baseline, before SINCE
+            if expand == "version" and status == "historical" and version == 1:
+                return _version_resp("a1", "Alice", "2026-04-01T09:00:00Z")
+            if expand == "body.storage" and status == "historical" and version == 2:
+                return _body_resp(_NEW_PAGE_BODY)
+            if expand == "body.storage" and status == "historical" and version == 1:
+                return _body_resp("<p>Original baseline content before Alice's edit.</p>")
+            if expand == "body.storage" and (status is None or version is None):
+                raise AssertionError("must not fetch the live/unpinned body")
+        raise AssertionError(f"unexpected call: {url} {params}")
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
+        items = fetch_team_pages(make_atlassian_config(), AUTH, cfg, SINCE, UNTIL, TEAM_IDS)
+
+    assert len(items) == 1
+    assert items[0].author == "Alice"
+    assert items[0].timestamp == datetime(2026, 5, 15, 9, 0, 0, tzinfo=timezone.utc)
+    assert "rollout plan" in items[0].content
+
+
 def test_fetch_team_pages_no_team_edit_within_window_excluded():
     """Contributor matched historically, but that edit predates `since` -- the page
     should not be reported as team activity for this period."""
