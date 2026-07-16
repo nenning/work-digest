@@ -2,7 +2,7 @@
 
 A Windows command-line tool that fetches activity from Jira, Confluence, Teams, and Outlook, summarizes it with a configurable LLM (OpenAI, Anthropic, or Azure OpenAI), and delivers an HTML digest to your inbox.
 
-**M365 is optional.** If you don't have Azure/M365 set up, set `m365.enabled: false` and the tool will fetch Jira + Confluence only and open a pre-composed draft in Outlook Classic instead of sending via the Graph API.
+**M365 is optional.** If you don't have Azure/M365 set up, set `m365.enabled: false` and the tool will fetch Jira + Confluence only and send an e-mail via the Outlook Classic COM API instead of sending via the Graph API.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ A Windows command-line tool that fetches activity from Jira, Confluence, Teams, 
 - **Windows 10 or 11** (for Task Scheduler integration)
 - Internet connection and access to Jira Cloud and Confluence Cloud
 - Microsoft 365 access (optional — only needed for Teams/Outlook sources and Graph API email delivery)
-- **pywin32** — required when `m365.enabled: false` to open local Outlook drafts (`pip install pywin32`)
+- **pywin32** — required when `m365.enabled: false` to use the Outlook COM API (`pip install pywin32`)
 
 Install dependencies:
 
@@ -155,7 +155,7 @@ python main.py
 1. Fetches Jira, Confluence, Teams, and Outlook activity in parallel, since the last successful run (or 24 hours ago on first run)
 2. Summarizes each item individually with the configured LLM (`llm_workers` parallel calls, default 4)
 3. Renders the HTML digest template
-4. Delivers it — via Graph API `sendMail` (`m365.enabled: true`) or a local Outlook Classic draft (`m365.enabled: false`)
+4. Delivers it — via Graph API `sendMail` (`m365.enabled: true`) or a local Outlook Classic COM API (`m365.enabled: false`)
 
 State is saved to `~/.digest/state.json` after a successful send (skipped on `--dry-run`).
 
@@ -199,16 +199,8 @@ Task Scheduler logs are available in **Event Viewer**:
 
 ### Remove Tasks
 
-To remove all work-digest tasks:
-
 ```bash
-for /f "tokens=2 delims= " %a in ('schtasks /query /tn "WorkDigest*" /fo list ^| find "TaskName"') do schtasks /delete /tn "%a" /f
-```
-
-Or remove individual tasks:
-
-```bash
-schtasks /delete /tn "WorkDigest-08-00" /f
+schedule-digest.bat
 ```
 
 ## Troubleshooting
@@ -222,10 +214,10 @@ schtasks /delete /tn "WorkDigest-08-00" /f
 | `No module named 'yaml'` | PyYAML not installed | Run `pip install -r requirements.txt` |
 | `openai.APIError: 401 ...` | Invalid LLM API key | Check your LLM provider API key in `config.yaml` |
 | Digest not sent | Check email address resolved from M365 | Ensure your Microsoft 365 account has a valid primary email address |
-| `pywin32 is not installed` | Local draft mode requires pywin32 | Run `pip install pywin32` |
+| `pywin32 is not installed` | Local email sending mode requires pywin32 | Run `pip install pywin32` |
 | Scheduled task fails with no visible error | Import-time dependency failure (tasks registered against old `main.py` path) | Re-run `schedule-digest.bat` to re-register tasks against `run_digest.py` |
 | Dependency version mismatch at startup | Conflicting package upgrades (e.g. `pydantic-core`) | Run `pip install --force-reinstall pydantic` or `pip install -r requirements.txt` |
-| Outlook draft doesn't open | COM automation failed (Outlook not running or not installed) | Open Outlook Classic first, then retry |
+| Outlook draft doesn't open or e-mail is not sent | COM automation failed (Outlook not running or not installed) | Open Outlook Classic first, then retry |
 
 ### Debug Mode
 
