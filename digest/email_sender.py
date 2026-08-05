@@ -150,6 +150,7 @@ def _render_html(
     notices: Optional[List[str]] = None,
     time_range: Optional[str] = None,
     timing: Optional[dict] = None,
+    command_line: Optional[str] = None,
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
@@ -168,6 +169,7 @@ def _render_html(
         notices=notices or [],
         time_range=time_range,
         timing_text=_format_timing_text(timing) if timing else None,
+        command_line=command_line,
     )
 
 
@@ -232,6 +234,7 @@ def send_via_smtp(
     time_range: Optional[str] = None,
     timing: Optional[dict] = None,
     m365_token: Optional[str] = None,
+    command_line: Optional[str] = None,
 ) -> bool:
     """Render and send the digest email via SMTP.
 
@@ -255,7 +258,7 @@ def send_via_smtp(
     n_sources = len({it.source for grp in sections.values() for it in grp})
     _now = now if now is not None else datetime.now().astimezone()
     subject = _build_subject(config.subject_prefix, _now, n_items, n_sources)
-    html_body = _render_html(sections, subject, notices, time_range, timing)
+    html_body = _render_html(sections, subject, notices, time_range, timing, command_line)
 
     if dry_run:
         preview_to = smtp_cfg.sender or smtp_cfg.username
@@ -277,8 +280,9 @@ def send_mgmt_summary_via_smtp(
     time_range: Optional[str] = None,
     notices: Optional[List[str]] = None,
     m365_token: Optional[str] = None,
+    command_line: Optional[str] = None,
 ) -> bool:
-    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices)
+    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices, command_line)
 
     if dry_run:
         preview_to = smtp_cfg.sender or smtp_cfg.username
@@ -299,6 +303,7 @@ def send_via_com(
     notices: Optional[List[str]] = None,
     time_range: Optional[str] = None,
     timing: Optional[dict] = None,
+    command_line: Optional[str] = None,
 ) -> bool:
     """Render the digest and send (or preview as draft) via Outlook Classic COM.
 
@@ -325,7 +330,7 @@ def send_via_com(
     n_sources = len({it.source for grp in sections.values() for it in grp})
     _now = now if now is not None else datetime.now().astimezone()
     subject = _build_subject(config.subject_prefix, _now, n_items, n_sources)
-    html_body = _render_html(sections, subject, notices, time_range, timing)
+    html_body = _render_html(sections, subject, notices, time_range, timing, command_line)
 
     try:
         import win32com.client  # pywin32 — Windows only
@@ -360,6 +365,7 @@ def _render_mgmt_html(
     subject: str,
     time_range: Optional[str] = None,
     notices: Optional[List[str]] = None,
+    command_line: Optional[str] = None,
 ) -> str:
     env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
     env.filters["safe_url"] = _safe_url
@@ -388,6 +394,7 @@ def _render_mgmt_html(
         wip_tickets=wip_tickets,
         todo_tickets=todo_tickets,
         confluence_items=confluence_items,
+        command_line=command_line,
     )
 
 
@@ -401,8 +408,9 @@ def send_mgmt_summary_via_com(
     dry_run: bool = False,
     time_range: Optional[str] = None,
     notices: Optional[List[str]] = None,
+    command_line: Optional[str] = None,
 ) -> bool:
-    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices)
+    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices, command_line)
 
     try:
         import win32com.client

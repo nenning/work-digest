@@ -196,6 +196,14 @@
       line-height: 1.6;
     }
 
+    .cmdline {
+      margin: 8px 0 0;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 10px;
+      color: #cbd5e1;
+      word-break: break-all;
+    }
+
     /* Mobile */
     @media (max-width: 600px) {
       .header { padding: 16px 16px; }
@@ -258,6 +266,7 @@
       <!-- Footer -->
       <div class="footer">
         AI-generated summary &middot; all headings link to originals
+        {% if command_line %}<div class="cmdline">{{ command_line }}</div>{% endif %}
         {% if timing_text %}<pre class="timing-pre">{{ timing_text }}</pre>{% endif %}
       </div>
 

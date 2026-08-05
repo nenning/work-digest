@@ -16,6 +16,7 @@ import concurrent.futures
 import getpass
 import keyring
 import logging
+import shlex
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -163,6 +164,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Reconstructed as "python digest/main.py ..." rather than sys.argv[0] so the
+    # email footer never leaks the local machine's absolute interpreter/script path.
+    command_line = "python digest/main.py" + ((" " + shlex.join(sys.argv[1:])) if sys.argv[1:] else "")
+
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -206,18 +211,18 @@ def main() -> None:
 
     with process_lock(data_dir):
         if args.mgmt_summary:
-            _run_mgmt_summary(args, config, cache_file)
+            _run_mgmt_summary(args, config, cache_file, command_line)
         else:
             while True:
                 try:
-                    _run(args, config, state_file, cache_file)
+                    _run(args, config, state_file, cache_file, command_line)
                     break
                 except LLMEndpointError as exc:
                     log.warning("%s -- waiting 10 min before retry", exc)
                     time.sleep(600)
 
 
-def _run_mgmt_summary(args, config, cache_file: Path) -> None:
+def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None:
     mgmt_cfg = config.mgmt_summary
     if mgmt_cfg is None:
         raise RuntimeError(
@@ -346,7 +351,7 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
             narrative, jira_items, confluence_items,
             subject, config.email, config.smtp, recipient,
             dry_run=args.dry_run, time_range=time_range,
-            m365_token=m365_token,
+            m365_token=m365_token, command_line=command_line,
         )
     elif sys.platform == "win32":
         if not args.dry_run:
@@ -355,6 +360,7 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
             narrative, jira_items, confluence_items,
             subject, config.email, recipient,
             dry_run=args.dry_run, time_range=time_range,
+            command_line=command_line,
         )
     else:
         raise RuntimeError(
@@ -363,7 +369,7 @@ def _run_mgmt_summary(args, config, cache_file: Path) -> None:
         )
 
 
-def _run(args, config, state_file: Path, cache_file: Path) -> None:
+def _run(args, config, state_file: Path, cache_file: Path, command_line: str) -> None:
     state = load_state(state_file)
 
     # Authenticate with both backends
@@ -490,6 +496,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
             time_range=time_range,
             timing=timing,
             m365_token=m365_token,
+            command_line=command_line,
         )
     elif sys.platform == "win32":
         if not args.dry_run:
@@ -503,6 +510,7 @@ def _run(args, config, state_file: Path, cache_file: Path) -> None:
             notices=notices,
             time_range=time_range,
             timing=timing,
+            command_line=command_line,
         )
     else:
         raise RuntimeError(

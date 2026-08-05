@@ -91,6 +91,13 @@
       padding: 16px 28px; border-top: 1px solid #e2e8f0;
       text-align: center; font-size: 12px; color: #94a3b8;
     }
+    .cmdline {
+      margin: 8px 0 0;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 10px;
+      color: #cbd5e1;
+      word-break: break-all;
+    }
     @media (max-width: 600px) {
       .header { padding: 16px 16px; }
       .narrative { padding: 18px 16px; }
@@ -186,6 +193,7 @@
 
         <div class="footer">
           AI-generated summary &middot; all titles link to originals
+          {% if command_line %}<div class="cmdline">{{ command_line }}</div>{% endif %}
         </div>
 
       </div>
