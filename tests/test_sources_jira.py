@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 from digest.config import AtlassianConfig
 from digest.sources.jira import (
     fetch, _extract_text, _display_name, _parse_dt, _append_extra, _has_mention,
-    _merge_field_changes, _jql_search,
+    _merge_field_changes, _net_field_change, _jql_search,
 )
 
 
@@ -161,6 +161,61 @@ def test_multiple_field_changes_aggregated_into_one_item():
     assert len(changes) == 1
     assert "status" in changes[0].content
     assert "assignee" in changes[0].content
+
+
+def test_multi_value_field_swap_pairs_removal_and_addition_per_history():
+    # Jira logs a fixVersions swap as two items in the same history: a removal
+    # (toString empty) and an addition (fromString empty). Without pairing them
+    # per-history, a naive across-history merge can end up chaining the removal
+    # fragment as the "final" value instead of what was actually added.
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:10:00Z",
+        "author": {"displayName": "Bob"},
+        "items": [
+            {"field": "Fix Version", "fromString": "PI 3", "toString": None},
+            {"field": "Fix Version", "fromString": None, "toString": "PI 1"},
+        ],
+    }]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    changes = [i for i in items if i.kind == "field_change"]
+    assert len(changes) == 1
+    assert changes[0].content == "Fix Version: PI 3 → PI 1"
+
+
+def test_multi_value_field_reverted_across_histories_is_dropped():
+    # EGOV-595: Fix Version was swapped PI 3 -> PI 1 -> PI 3 (back to the original).
+    # The two swaps must chain to a net no-op and be dropped entirely, not report
+    # a stray "PI 3 -> —" from an unpaired removal fragment.
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [
+        {
+            "created": "2026-04-09T08:10:00Z",
+            "author": {"displayName": "Automation for Jira"},
+            "items": [
+                {"field": "Fix Version", "fromString": "PI 3", "toString": None},
+                {"field": "Fix Version", "fromString": None, "toString": "PI 1"},
+            ],
+        },
+        {
+            "created": "2026-04-09T08:20:00Z",
+            "author": {"displayName": "Automation for Jira"},
+            "items": [
+                {"field": "Fix Version", "fromString": None, "toString": "PI 3"},
+                {"field": "Fix Version", "fromString": "PI 1", "toString": None},
+            ],
+        },
+    ]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    assert not any(i.kind == "field_change" for i in items)
 
 
 def test_description_change_produces_description_change_kind():
@@ -441,6 +496,31 @@ def test_merge_sorts_by_timestamp():
     result = _merge_field_changes(changes)
     assert result[0]["from"] == "Backlog"
     assert result[0]["to"] == "In Progress"
+
+
+# --- _net_field_change ---
+
+def test_net_field_change_single_item_passthrough():
+    changes = [{"field": "status", "fromString": "Open", "toString": "In Progress"}]
+    assert _net_field_change(changes) == ("Open", "In Progress")
+
+
+def test_net_field_change_pairs_removal_and_addition():
+    changes = [
+        {"field": "Fix Version", "fromString": "PI 3", "toString": None},
+        {"field": "Fix Version", "fromString": None, "toString": "PI 1"},
+    ]
+    assert _net_field_change(changes) == ("PI 3", "PI 1")
+
+
+def test_net_field_change_removal_only():
+    changes = [{"field": "Fix Version", "fromString": "PI 3", "toString": None}]
+    assert _net_field_change(changes) == ("PI 3", None)
+
+
+def test_net_field_change_addition_only():
+    changes = [{"field": "Fix Version", "fromString": None, "toString": "PI 4"}]
+    assert _net_field_change(changes) == (None, "PI 4")
 
 
 # --- unit helpers ---

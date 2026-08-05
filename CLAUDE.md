@@ -64,7 +64,12 @@ digest/sources/
   jira.py               Watched tickets (watcher = currentUser()); per-ticket changelog
                         via GET /issue/{key}/changelog; detects @mentions in ADF;
                         per-ticket priority: mentions > comments/desc changes > field changes;
-                        field changes merged to initial→final state (net-zero dropped);
+                        field changes merged to initial→final state (net-zero dropped); multi-value
+                        fields (e.g. fixVersions) log a value swap as two changelog items in the
+                        same history — a removal (toString empty) and an addition (fromString
+                        empty) — which are paired into one net from→to per history before merging
+                        across histories, otherwise a stray removal fragment can be picked up as
+                        the final value instead of what was actually left in place;
                         new tickets via separate JQL query; JQL search paginates via
                         nextPageToken/isLast (POST /rest/api/3/search/jql)
   confluence.py         Mentions + page updates (CQL); deduplicates per page; CQL search

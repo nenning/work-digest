@@ -266,6 +266,7 @@ def _collect_candidates(
         history_author = _display_name(history.get("author"))
         history_ts = _parse_dt(history["created"])
 
+        history_field_items: dict[str, list[dict]] = {}
         for change in history.get("items", []):
             field = change.get("field", "")
             if field in ("comment", "Attachment"):
@@ -291,16 +292,20 @@ def _collect_candidates(
                         author=history_author,
                         timestamp=history_ts,
                     )
-            else:
-                from_val = _format_field_value(field, change.get("fromString") or "—")
-                to_val = _format_field_value(field, change.get("toString") or "—")
-                field_changes.append({
-                    "field": field,
-                    "from": from_val,
-                    "to": to_val,
-                    "author": history_author,
-                    "ts": history_ts,
-                })
+                continue
+            history_field_items.setdefault(field, []).append(change)
+
+        for field, field_items in history_field_items.items():
+            from_str, to_str = _net_field_change(field_items)
+            from_val = _format_field_value(field, from_str or "—")
+            to_val = _format_field_value(field, to_str or "—")
+            field_changes.append({
+                "field": field,
+                "from": from_val,
+                "to": to_val,
+                "author": history_author,
+                "ts": history_ts,
+            })
 
     if desc_item is not None:
         candidates.append(desc_item)
@@ -361,6 +366,22 @@ def _find_unblocked_tickets(issue: dict, config: AtlassianConfig) -> list[dict]:
             continue
         result.append({"key": key, "title": title, "url": f"{config.url}/browse/{key}"})
     return result
+
+
+def _net_field_change(changes: list[dict]) -> tuple[str | None, str | None]:
+    """Combine changelog items for one field within a single history entry into one net from/to.
+
+    Multi-value fields (e.g. fixVersions) log a value swap as two separate items in the same
+    history: a removal (toString empty) and an addition (fromString empty). Left unpaired, a
+    chronological merge across histories can pick up a stray removal fragment as the "final"
+    state instead of the value actually left in place (see EGOV-595: repeated Fix Version swaps
+    ending back at the original value showed as "PI 3 → —").
+    """
+    if len(changes) == 1:
+        return changes[0].get("fromString"), changes[0].get("toString")
+    removed = [c["fromString"] for c in changes if c.get("fromString") and not c.get("toString")]
+    added = [c["toString"] for c in changes if c.get("toString") and not c.get("fromString")]
+    return (", ".join(removed) or None), (", ".join(added) or None)
 
 
 def _merge_field_changes(changes: list[dict]) -> list[dict]:
