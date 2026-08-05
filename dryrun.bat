@@ -1,1 +1,1 @@
-python .\digest\main.py --dry-run --since 24h
+python "%~dp0run_digest.py" --dry-run --since 24h
