@@ -71,7 +71,12 @@ digest/sources/
                         across histories, otherwise a stray removal fragment can be picked up as
                         the final value instead of what was actually left in place;
                         new tickets via separate JQL query; JQL search paginates via
-                        nextPageToken/isLast (POST /rest/api/3/search/jql)
+                        nextPageToken/isLast (POST /rest/api/3/search/jql); merged comment,
+                        mention, and field_change items credit every distinct author involved
+                        (comma-joined), not just whoever's edit landed last — field_change
+                        authorship is drawn from the pre-merge per-history entries so someone's
+                        in-window edit to a field still counts even if it was later netted out
+                        as a no-op
   confluence.py         Mentions + page updates (CQL); deduplicates per page; CQL search
                         paginates via `_links.next` cursor (Confluence Cloud ignores a
                         client-incremented `start` past page 1 — verified against a live
@@ -106,7 +111,8 @@ digest/sources/
                         otherwise a report over a past window (--sprint, --to) could pick up edits
                         made after `until`.
 digest/templates/
-  digest.html.j2        Inline-CSS responsive HTML email template
+  digest.html.j2        Inline-CSS responsive HTML email template; shows `item.author`
+                        next to the title for every item (all sources) when present
   mgmt_summary.html.j2  Management summary template: narrative block + supporting ticket table
 ```
 

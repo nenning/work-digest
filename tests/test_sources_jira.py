@@ -163,6 +163,30 @@ def test_multiple_field_changes_aggregated_into_one_item():
     assert "assignee" in changes[0].content
 
 
+def test_field_changes_by_different_authors_credit_both():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [
+        {
+            "created": "2026-04-09T08:10:00Z",
+            "author": {"displayName": "Bob"},
+            "items": [{"field": "status", "fromString": "Open", "toString": "In Progress"}],
+        },
+        {
+            "created": "2026-04-09T08:20:00Z",
+            "author": {"displayName": "Anna"},
+            "items": [{"field": "assignee", "fromString": "unknown", "toString": "Anna"}],
+        },
+    ]
+    mock_get, mock_post = _mock_responses([issue])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    changes = [i for i in items if i.kind == "field_change"]
+    assert len(changes) == 1
+    assert changes[0].author == "Anna, Bob"
+
+
 def test_multi_value_field_swap_pairs_removal_and_addition_per_history():
     # Jira logs a fixVersions swap as two items in the same history: a removal
     # (toString empty) and an addition (fromString empty). Without pairing them
@@ -332,7 +356,7 @@ def test_multiple_comments_on_same_ticket_merge_into_one_item():
     assert len(comments) == 1
     assert "First question" in comments[0].content
     assert "Second question" in comments[0].content
-    assert comments[0].author == "Anna"  # latest comment's author
+    assert comments[0].author == "Anna, Marco"  # every distinct commenter, not just the latest
 
 
 def test_comment_and_description_change_merge_into_one_item():
@@ -378,7 +402,7 @@ def test_multiple_mentions_on_same_ticket_merge_with_mention_authors():
     mentions = [i for i in items if i.kind == "mention"]
     assert len(mentions) == 1
     assert mentions[0].metadata["mention_authors"] == ["Marco", "Anna"]
-    assert mentions[0].author == "Anna"  # latest mention's author
+    assert mentions[0].author == "Anna, Marco"  # every distinct mentioner, not just the latest
 
 
 def test_comment_before_since_excluded():

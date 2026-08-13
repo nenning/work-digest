@@ -321,7 +321,9 @@ def _collect_candidates(
                         if unblocks:
                             c["unblocks"] = unblocks
             latest_ts = max(c["ts"] for c in net_changes)
-            latest_author = next(c["author"] for c in net_changes if c["ts"] == latest_ts)
+            # Every distinct author who changed any field in the window, not just whoever's
+            # edit landed last -- matches confluence.py's in-window author collection.
+            authors = sorted({c["author"] for c in field_changes})
             remote_links = None
             enriched = []
             for c in net_changes:
@@ -338,7 +340,7 @@ def _collect_candidates(
                 source="jira", kind="field_change",
                 title=title, url=url,
                 content=content,
-                author=latest_author,
+                author=", ".join(authors),
                 timestamp=latest_ts,
                 metadata={"changes": enriched},
             ))
@@ -406,11 +408,12 @@ def _merge_comment_tier(items: List[SourceItem]) -> SourceItem:
     ordered = sorted(items, key=lambda i: i.timestamp)
     parts = [f"[{labels.get(i.kind, i.kind)} von {i.author}] {i.content}" for i in ordered]
     latest = ordered[-1]
+    authors = sorted({i.author for i in ordered})
     return SourceItem(
         source="jira", kind="comment",
         title=latest.title, url=latest.url,
         content="\n\n".join(parts),
-        author=latest.author,
+        author=", ".join(authors),
         timestamp=latest.timestamp,
     )
 
@@ -425,7 +428,7 @@ def _merge_mention_tier(items: List[SourceItem]) -> SourceItem:
         source="jira", kind="mention",
         title=latest.title, url=latest.url,
         content="\n\n".join(parts),
-        author=latest.author,
+        author=", ".join(sorted(authors)),
         timestamp=latest.timestamp,
         metadata={"mention_authors": authors},
     )

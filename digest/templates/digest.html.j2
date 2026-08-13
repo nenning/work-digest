@@ -255,7 +255,7 @@
             <div class="item-title">
               <span class="source-chip chip-{{ item.source }}">{{ source_icons[item.source] }} {{ source_labels[item.source] }}</span>
               <a href="{{ item.url | safe_url }}">{{ item.title }}</a>
-              {% if item.source == 'confluence' and item.author %}
+              {% if item.author %}
                 <span class="item-meta">{{ item.author }}</span>
               {% endif %}
               {% if item.priority == 'action_needed' %}
