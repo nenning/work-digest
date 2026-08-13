@@ -75,7 +75,13 @@ digest/sources/
   confluence.py         Mentions + page updates (CQL); deduplicates per page; CQL search
                         paginates via `_links.next` cursor (Confluence Cloud ignores a
                         client-incremented `start` past page 1 — verified against a live
-                        instance that start=0/50/100 all return the same first page)
+                        instance that start=0/50/100 all return the same first page);
+                        page_update author is every distinct editor within the window
+                        (comma-joined), not just the current version's — the backward walk
+                        to the pre-window baseline already fetches each intermediate
+                        version's metadata to check its timestamp, so collecting the `by`
+                        field along the way is free (same idea as mgmt_confluence.py's
+                        `_walk_version_history`, without the team-account-id filter)
   teams.py              Channel messages + DMs via Graph API
   outlook.py            Inbox messages via Graph API
   mgmt_jira.py          Management summary: paginated team ticket fetch (nextPageToken); sprint

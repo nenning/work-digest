@@ -49,6 +49,30 @@ def test_fetch_page_updates():
     assert "Sprint 14 Retro" in page_updates[0].title
     # Title should be clean — no "Updated:" prefix
     assert not page_updates[0].title.startswith("Updated:")
+    assert page_updates[0].author == "Anna"
+
+
+def test_page_updated_by_multiple_authors_in_window():
+    """A page edited by two different people within the window should credit both,
+    not just whoever holds the current version -- same as mgmt_confluence.py does."""
+    page = dict(
+        PAGE,
+        version={"number": 4, "by": {"displayName": "Anna"}, "when": "2026-04-09T10:00:00Z"},
+    )
+    responses = [
+        make_mock({"accountId": "user-abc"}),                                     # /wiki/rest/api/user/current
+        make_mock({"results": []}),                                               # mentions CQL
+        make_mock({"results": [page]}),                                           # page updates CQL
+        make_mock({"version": {"when": "2026-04-09T09:00:00Z", "by": {"displayName": "Bob"}}}),  # v3: in-window, Bob
+        make_mock({"version": {"when": "2026-04-09T06:00:00Z"}}),                 # v2: baseline, before SINCE
+        make_mock(PREV_BODY),                                                     # baseline body
+    ]
+    with patch("digest.sources.confluence.requests.get", side_effect=responses):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    page_updates = [i for i in items if i.kind == "page_update"]
+    assert len(page_updates) == 1
+    assert page_updates[0].author == "Anna, Bob"
 
 
 def test_cosmetic_only_page_skipped():
@@ -163,7 +187,7 @@ def test_page_updates_paginates_via_cursor_link():
         make_mock({"results": batch2}),                                                # page updates CQL, page 2 (last)
     ]
     with patch("digest.sources.confluence.requests.get", side_effect=responses), \
-         patch("digest.sources.confluence._fetch_page_diff", return_value="Added: something significant"):
+         patch("digest.sources.confluence._fetch_page_diff", return_value=("Added: something significant", [])):
         items = fetch(make_config(), "Basic xxx", SINCE)
 
     assert len(items) == 51

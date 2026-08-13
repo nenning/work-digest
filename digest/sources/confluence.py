@@ -5,7 +5,7 @@ import logging
 import re
 import requests
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
@@ -138,15 +138,18 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
         page_id = r["id"]
         version_num = r.get("version", {}).get("number", 1)
         current_body = r.get("body", {}).get("storage", {}).get("value", "")
-        diff = _fetch_page_diff(config, auth_header, page_id, version_num, since, current_body)
-        if diff is None:
+        result = _fetch_page_diff(config, auth_header, page_id, version_num, since, current_body)
+        if result is None:
             return None
+        diff, in_window_authors = result
+        current_author = r.get("version", {}).get("by", {}).get("displayName") or "unknown"
+        authors = sorted(set(in_window_authors) | {current_author})
         return SourceItem(
             source="confluence", kind="page_update",
             title=r["title"],  # clean title — no "Updated:" prefix
             url=f"{config.url}/wiki{r['_links'].get('webui', '')}",
             content=diff,
-            author=r.get("version", {}).get("by", {}).get("displayName") or "unknown",
+            author=", ".join(authors),
             timestamp=_parse_dt(r.get("version", {}).get("when", since_cql + ":00Z")),
         )
 
@@ -165,12 +168,16 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
 
 def _fetch_page_diff(
     config: AtlassianConfig, auth_header: str, page_id: str, version_num: int, since: datetime, current_body: str
-) -> Optional[str]:
-    """Diff the already-fetched current body against the baseline version; return a
-    text diff or None if trivial.
+) -> Optional[Tuple[str, List[str]]]:
+    """Diff the already-fetched current body against the baseline version; return
+    (diff, in-window authors excluding the current version's) or None if trivial.
 
     Baseline is the most recent version whose timestamp is <= since, ensuring the diff
-    covers all edits in the window even when a page was edited multiple times.
+    covers all edits in the window even when a page was edited multiple times. The same
+    backward walk used to locate that baseline already fetches every intermediate
+    version's metadata (to check its timestamp), which includes its author -- so the
+    distinct authors of every other in-window edit are collected here for free, the
+    same way mgmt_confluence.py's _walk_version_history does for the management summary.
     """
     if version_num <= 1:
         return None  # no history to diff against
@@ -178,8 +185,10 @@ def _fetch_page_diff(
     headers = {"Authorization": auth_header, "Accept": "application/json"}
 
     # Walk backwards from version_num-1 fetching only metadata (no body) until we find
-    # the most recent version that predates `since`.
+    # the most recent version that predates `since`. Every version visited before that
+    # point postdates `since` (still in-window), so its author is recorded along the way.
     baseline = None
+    in_window_authors: dict = {}
     for v in range(version_num - 1, 0, -1):
         try:
             resp = requests.get(
@@ -189,12 +198,19 @@ def _fetch_page_diff(
                 timeout=30,
             )
             resp.raise_for_status()
-            when_str = resp.json().get("version", {}).get("when", "")
-            if when_str and _parse_dt(when_str) <= since:
-                baseline = v
-                break
+            version = resp.json().get("version", {})
         except requests.RequestException:
             break
+        when_str = version.get("when", "")
+        if not when_str:
+            continue
+        when = _parse_dt(when_str)
+        if when <= since:
+            baseline = v
+            break
+        name = (version.get("by") or {}).get("displayName") or "unknown"
+        if name not in in_window_authors or when > in_window_authors[name]:
+            in_window_authors[name] = when
 
     if baseline is None:
         return None  # page created entirely within the window; no pre-window baseline
@@ -213,7 +229,10 @@ def _fetch_page_diff(
 
     curr_text = _storage_to_text(current_body)
     prev_text = _storage_to_text(prev_body)
-    return _compute_diff(prev_text, curr_text)
+    diff = _compute_diff(prev_text, curr_text)
+    if diff is None:
+        return None
+    return diff, sorted(in_window_authors)
 
 
 _TABLE_RE = re.compile(r"<table\b[^>]*>(.*?)</table>", re.IGNORECASE | re.DOTALL)
