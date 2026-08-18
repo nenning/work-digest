@@ -12,41 +12,17 @@ A Windows Python CLI tool that fetches work activity from Jira, Confluence, Micr
 # Install dependencies
 pip install -r requirements.txt
 
-# First-time M365 auth (device code flow)
-python digest/main.py --setup-auth
-
-# Run (sends email)
-python digest/main.py
-
-# Dry-run (prints output, no email sent, no state saved)
+# Quick sanity check after a change (no email sent, no state saved)
 python digest/main.py --dry-run
+python digest/main.py --dry-run --verbose   # debug a slow/stuck run
 
-# Single source dry-run
-python digest/main.py --dry-run --source jira   # jira | confluence | teams | outlook
-
-# Override time window (h/d/w suffixes supported)
-python digest/main.py --since 24h
-
-# Verbose diagnostics (HTTP wire log + per-item timing) — combine with any other flags
-python digest/main.py --dry-run --verbose
-
-# Management summary mode
-python digest/main.py --mgmt-summary --sprint current --dry-run
-python digest/main.py --mgmt-summary --sprint "Sprint 42" --dry-run
-python digest/main.py --mgmt-summary --sprint "Sprint 42" --assume-done
-python digest/main.py --mgmt-summary --sprint current --short --dry-run
-python digest/main.py --mgmt-summary --since 7d --dry-run
-python digest/main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29
-
-# Run all tests
+# Run all tests / a single test file
 python -m pytest tests/ -v
-
-# Run a single test file
 python -m pytest tests/test_summarizer.py -v
-
-# Register scheduled tasks (run as Administrator)
-schedule-digest.bat
 ```
+
+Full CLI reference (all flags, personal digest + management summary examples,
+scheduling, troubleshooting) is in README.md — not duplicated here.
 
 ## Architecture
 
