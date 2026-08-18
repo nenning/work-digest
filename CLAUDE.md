@@ -58,7 +58,11 @@ digest/state.py         Per-source last-run timestamps in ~/.digest/state.json
 digest/summarizer.py    LLM abstraction (OpenAI / Azure OpenAI / Anthropic)
 digest/email_sender.py  Jinja2 HTML rendering; Graph API send or COM Outlook draft
 digest/auth/
-  atlassian.py          Basic Auth header for Jira/Confluence
+  atlassian.py          Auth header + API base URL resolution for Jira/Confluence — supports
+                        both classic API tokens (Basic email:token, direct to the tenant
+                        domain) and scoped API tokens (Bearer, routed through
+                        api.atlassian.com/ex/{jira,confluence}/{cloudId}/... — see
+                        `atlassian.auth_type` in Configuration)
   microsoft.py          MSAL device code flow; token cache at ~/.digest/token_cache.bin
 digest/sources/
   jira.py               Watched tickets (watcher = currentUser()); per-ticket changelog
@@ -134,10 +138,11 @@ State is only written on a successful personal digest send, never on `--dry-run`
 - **Sprint lookup:** Paginates `GET /rest/agile/1.0/board/{boardId}/sprint` with case-insensitive name match. Requires `mgmt_summary.jira_board_id` in config.
 - **Verbose diagnostics:** `--verbose` sets logging to DEBUG, enables raw HTTP wire logging (`http.client.HTTPConnection.debuglevel = 1`) and urllib3 debug logging, and turns on per-page timing/progress logs in `mgmt_confluence.py`. Added after a management-summary hang turned out to be Confluence Cloud's CQL search silently ignoring a client-incremented `start` past page 1.
 - **No unbounded external calls:** every `requests.get/post` call passes `timeout=`. `smtplib.SMTP(...)` and `msal.PublicClientApplication(...)` also get an explicit `timeout` — both default to none at all otherwise, which blocks forever on a hung connection (the M365 silent-refresh path runs on every scheduled run, so this matters even outside `--setup-auth`). The OpenAI/Anthropic clients in `summarizer.py` get `timeout=` (and `max_retries=0`, since callers already fail over to the next configured model rather than wanting the SDK to retry the same one) — `synthesize_mgmt_summary()`'s single large narrative call gets a bigger timeout (`max(llm_timeout * 3, 90)`) than the per-item path's `config.llm_timeout`, since it previously had no timeout at all and reusing the small per-item value risked spurious failures on a legitimately slower large generation.
+- **Atlassian auth (classic vs. scoped tokens):** `atlassian.auth_type` (default `classic`) selects the auth scheme. Classic API tokens use `Basic base64(email:token)` sent directly to the tenant domain (`atlassian.url`) — this covers both personal accounts and service accounts using a classic token. Scoped API tokens (id.atlassian.com's "API tokens with scopes" flow) use `Bearer <token>` and must be routed through `https://api.atlassian.com/ex/{jira,confluence}/{cloudId}/...` instead — Atlassian rejects them under Basic auth against the tenant domain with a 401 regardless of which email/username is paired with them. `resolve_atlassian_config()` in `auth/atlassian.py` resolves this once at startup: for `auth_type: scoped` it resolves `cloud_id` (from config, or via the tenant's public unauthenticated `{url}/_edge/tenant_info` endpoint) and sets `AtlassianConfig.jira_api_base`/`confluence_api_base` to the `api.atlassian.com` routes; for `classic` these default to `url` via `__post_init__`, so nothing changes. All Jira/Confluence REST calls in `sources/*.py` use `jira_api_base`/`confluence_api_base` — human-facing links (`/browse/{key}`, page `webui` links) always use the real `url` instead, since those must stay on the tenant domain regardless of auth scheme. A scoped token needs Jira **and** Confluence scopes granted separately — one without the other fails only that product's calls with a scope error (`401 Unauthorized; scope does not match` on `/wiki/rest/api/...`), which is a token-configuration problem to fix at id.atlassian.com, not something the code works around.
 
 ## Configuration
 
-Copy `digest/config.yaml.example` → `digest/config.yaml`. Required fields: Atlassian URL/email/token, LLM provider/key/model, `schedule.times`. Optional: `m365` block (tenant_id, client_id), `llm.endpoint` for Azure, `llm.fallback_model`. For management summary: `mgmt_summary` block with at minimum `jira_jql`.
+Copy `digest/config.yaml.example` → `digest/config.yaml`. Required fields: Atlassian URL/email/token, LLM provider/key/model, `schedule.times`. Optional: `m365` block (tenant_id, client_id), `llm.endpoint` for Azure, `llm.fallback_model`, `atlassian.auth_type`/`atlassian.cloud_id` (see above — only needed for scoped API tokens). For management summary: `mgmt_summary` block with at minimum `jira_jql`.
 
 ## Testing
 

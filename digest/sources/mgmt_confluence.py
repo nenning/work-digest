@@ -141,7 +141,7 @@ def _search_all(config: AtlassianConfig, headers: dict, cql: str) -> List[dict]:
     `_links.next` instead, which is absent once there are no more results.
     """
     results: List[dict] = []
-    url = f"{config.url}/wiki/rest/api/content/search"
+    url = f"{config.confluence_api_base}/wiki/rest/api/content/search"
     params = {"cql": cql, "expand": "version", "limit": _PAGE_SIZE}
     for _ in range(_MAX_SEARCH_PAGES):
         resp = requests.get(url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT)
@@ -221,7 +221,7 @@ def _walk_version_history(
         log.debug("Page %s: checking version %d", page_id, v)
         try:
             resp = requests.get(
-                f"{config.url}/wiki/rest/api/content/{page_id}",
+                f"{config.confluence_api_base}/wiki/rest/api/content/{page_id}",
                 headers=headers,
                 params={"expand": "version", "status": "historical", "version": v},
                 timeout=_REQUEST_TIMEOUT,
@@ -268,7 +268,7 @@ def _diff_against_baseline(
     """
     try:
         curr = requests.get(
-            f"{config.url}/wiki/rest/api/content/{page_id}",
+            f"{config.confluence_api_base}/wiki/rest/api/content/{page_id}",
             headers=headers,
             params={"expand": "body.storage", "status": "historical", "version": version_num},
             timeout=_REQUEST_TIMEOUT,
@@ -283,7 +283,7 @@ def _diff_against_baseline(
     else:
         try:
             prev = requests.get(
-                f"{config.url}/wiki/rest/api/content/{page_id}",
+                f"{config.confluence_api_base}/wiki/rest/api/content/{page_id}",
                 headers=headers,
                 params={"expand": "body.storage", "status": "historical", "version": baseline_version},
                 timeout=_REQUEST_TIMEOUT,

@@ -7,6 +7,10 @@ Provider = Literal["openai", "anthropic", "azure_openai"]
 VALID_PROVIDERS = {"openai", "anthropic", "azure_openai"}
 
 
+AuthType = Literal["classic", "scoped"]
+VALID_AUTH_TYPES = {"classic", "scoped"}
+
+
 @dataclass
 class AtlassianConfig:
     url: str
@@ -15,6 +19,19 @@ class AtlassianConfig:
     jira_projects: List[str]
     confluence_spaces: List[str]
     jira_jql_extra: Optional[str] = None  # per AND an alle Jira-Queries angehängt
+    auth_type: AuthType = "classic"       # "classic" = Basic email:token; "scoped" = Bearer token
+    cloud_id: Optional[str] = None        # only used for auth_type "scoped"; auto-resolved if unset
+    # Resolved API roots -- default to `url` (classic behavior). For "scoped" auth,
+    # resolve_atlassian_config() overrides these to the api.atlassian.com/ex/{product}/{cloud_id}
+    # routes that scoped tokens require. Human-facing links (browse/webui) always use `url`.
+    jira_api_base: Optional[str] = None
+    confluence_api_base: Optional[str] = None
+
+    def __post_init__(self):
+        if self.jira_api_base is None:
+            self.jira_api_base = self.url
+        if self.confluence_api_base is None:
+            self.confluence_api_base = self.url
 
 
 @dataclass
@@ -118,6 +135,10 @@ def load_config(path: Path) -> Config:
     m = raw.get("m365") or {}   # guard against `m365: null` (all children commented out)
     llm = raw["llm"]
 
+    auth_type = a.get("auth_type", "classic")
+    if auth_type not in VALID_AUTH_TYPES:
+        raise ValueError(f"atlassian.auth_type must be one of {sorted(VALID_AUTH_TYPES)}, got: {auth_type!r}")
+
     provider = llm["provider"]
     if provider not in VALID_PROVIDERS:
         raise ValueError(f"llm.provider must be one of {sorted(VALID_PROVIDERS)}, got: {provider!r}")
@@ -135,6 +156,8 @@ def load_config(path: Path) -> Config:
             jira_projects=a.get("jira_projects", []),
             confluence_spaces=a.get("confluence_spaces", []),
             jira_jql_extra=a.get("jira_jql_extra"),
+            auth_type=auth_type,
+            cloud_id=a.get("cloud_id"),
         ),
         m365=M365Config(
             tenant_id=m.get("tenant_id", "organizations"),

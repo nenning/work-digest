@@ -27,7 +27,7 @@ def fetch_sprint(
     start_at = 0
     while True:
         resp = requests.get(
-            f"{config.url}/rest/agile/1.0/board/{board_id}/sprint",
+            f"{config.jira_api_base}/rest/agile/1.0/board/{board_id}/sprint",
             headers=headers,
             params={"startAt": start_at, "maxResults": 50},
             timeout=30,
@@ -56,7 +56,7 @@ def _fetch_active_sprint(
     """Return the currently active sprint on the given board."""
     headers = {"Authorization": auth_header, "Accept": "application/json"}
     resp = requests.get(
-        f"{config.url}/rest/agile/1.0/board/{board_id}/sprint",
+        f"{config.jira_api_base}/rest/agile/1.0/board/{board_id}/sprint",
         headers=headers,
         params={"state": "active", "maxResults": 1},
         timeout=30,
@@ -187,7 +187,7 @@ def _paginate_jql(config: AtlassianConfig, auth_header: str, jql: str) -> list:
             body["nextPageToken"] = next_page_token
 
         resp = requests.post(
-            f"{config.url}/rest/api/3/search/jql",
+            f"{config.jira_api_base}/rest/api/3/search/jql",
             headers=headers,
             json=body,
             timeout=30,

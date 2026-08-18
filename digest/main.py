@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from digest.auth.atlassian import get_auth_header
+from digest.auth.atlassian import get_auth_header, resolve_atlassian_config
 from digest.auth.microsoft import get_token
 from digest.config import load_config
 from digest.email_sender import (
@@ -184,6 +184,7 @@ def main() -> None:
     # This ensures Task Scheduler can invoke `python path\to\main.py` without needing to
     # set the working directory separately.
     config = load_config(Path(__file__).parent / "config.yaml")
+    config.atlassian = resolve_atlassian_config(config.atlassian)
 
     data_dir = config.data_dir
     state_file = data_dir / "state.json"

@@ -41,7 +41,7 @@ def _validate_space_keys(keys: List[str]) -> None:
 def _get_account_id(config: AtlassianConfig, auth_header: str) -> str:
     # Use Confluence's own user endpoint, not the Jira /rest/api/3/myself endpoint.
     resp = requests.get(
-        f"{config.url}/wiki/rest/api/user/current",
+        f"{config.confluence_api_base}/wiki/rest/api/user/current",
         headers={"Authorization": auth_header, "Accept": "application/json"},
         timeout=30,
     )
@@ -62,7 +62,7 @@ def _cql_search(config: AtlassianConfig, auth_header: str, cql: str, expand: str
     only the first page and warned if more existed, silently dropping the rest.
     """
     headers = {"Authorization": auth_header, "Accept": "application/json"}
-    url = f"{config.url}/wiki/rest/api/content/search"
+    url = f"{config.confluence_api_base}/wiki/rest/api/content/search"
     params = {"cql": cql, "expand": expand, "limit": _PAGE_SIZE}
     results: list = []
     for _ in range(_MAX_SEARCH_PAGES):
@@ -105,7 +105,7 @@ def _fetch_mentions(config: AtlassianConfig, auth_header: str, account_id: str, 
 def _fetch_comment_body(config: AtlassianConfig, auth_header: str, comment_id: str, author: str, fallback_title: str) -> str:
     try:
         resp = requests.get(
-            f"{config.url}/wiki/rest/api/content/{comment_id}",
+            f"{config.confluence_api_base}/wiki/rest/api/content/{comment_id}",
             headers={"Authorization": auth_header, "Accept": "application/json"},
             params={"expand": "body.storage"},
             timeout=30,
@@ -192,7 +192,7 @@ def _fetch_page_diff(
     for v in range(version_num - 1, 0, -1):
         try:
             resp = requests.get(
-                f"{config.url}/wiki/rest/api/content/{page_id}",
+                f"{config.confluence_api_base}/wiki/rest/api/content/{page_id}",
                 headers=headers,
                 params={"expand": "version", "status": "historical", "version": v},
                 timeout=30,
@@ -217,7 +217,7 @@ def _fetch_page_diff(
 
     try:
         prev = requests.get(
-            f"{config.url}/wiki/rest/api/content/{page_id}",
+            f"{config.confluence_api_base}/wiki/rest/api/content/{page_id}",
             headers=headers,
             params={"expand": "body.storage", "status": "historical", "version": baseline},
             timeout=30,

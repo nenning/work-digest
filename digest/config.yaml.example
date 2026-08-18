@@ -7,6 +7,20 @@ atlassian:
   # optional — added by AND to all 3 Jira queries (before ORDER BY)
   confluence_spaces: [ENG, DOC]
 
+  # auth_type: classic          # default. Basic auth with email + a classic API token
+  #                              # (works for both personal accounts and service accounts).
+  # auth_type: scoped           # use for an API token with scopes (id.atlassian.com's
+  #                              # "API tokens with scopes" flow). These use Bearer auth
+  #                              # routed through api.atlassian.com instead of Basic auth
+  #                              # against your tenant domain — Atlassian otherwise rejects
+  #                              # them with a 401 regardless of the email/username tried.
+  #                              # Note: a scoped token needs both Jira AND Confluence scopes
+  #                              # granted if this tool uses both sources — a token with only
+  #                              # Jira scopes will fail Confluence calls with a scope error.
+  # cloud_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  #                              # optional, only used with auth_type: scoped — auto-resolved
+  #                              # from {url}/_edge/tenant_info if omitted
+
 m365:
   enabled: true    # set to false to skip Teams/Outlook fetching
 

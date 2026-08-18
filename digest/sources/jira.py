@@ -43,7 +43,7 @@ def _fetch_issue_summary(config: AtlassianConfig, auth_header: str, key: str, ca
         return cache[key]
     try:
         resp = requests.get(
-            f"{config.url}/rest/api/3/issue/{key}",
+            f"{config.jira_api_base}/rest/api/3/issue/{key}",
             headers={"Authorization": auth_header, "Accept": "application/json"},
             params={"fields": "summary"},
             timeout=10,
@@ -67,7 +67,7 @@ def _enrich_keys(value: str, config: AtlassianConfig, auth_header: str, cache: d
 def _fetch_remote_links(config: AtlassianConfig, auth_header: str, key: str) -> list[dict]:
     try:
         resp = requests.get(
-            f"{config.url}/rest/api/3/issue/{key}/remotelink",
+            f"{config.jira_api_base}/rest/api/3/issue/{key}/remotelink",
             headers={"Authorization": auth_header, "Accept": "application/json"},
             timeout=10,
         )
@@ -107,7 +107,7 @@ def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[So
 
 def _get_current_user(config: AtlassianConfig, auth_header: str) -> dict:
     resp = requests.get(
-        f"{config.url}/rest/api/3/myself",
+        f"{config.jira_api_base}/rest/api/3/myself",
         headers={"Authorization": auth_header, "Accept": "application/json"},
         timeout=15,
     )
@@ -151,7 +151,7 @@ def _jql_search(config: AtlassianConfig, auth_header: str, jql: str) -> list:
             body["nextPageToken"] = next_page_token
 
         resp = requests.post(
-            f"{config.url}/rest/api/3/search/jql",
+            f"{config.jira_api_base}/rest/api/3/search/jql",
             headers=headers,
             json=body,
             timeout=30,
@@ -173,7 +173,7 @@ def _jql_search(config: AtlassianConfig, auth_header: str, jql: str) -> list:
 def _fetch_issue_changelog(config: AtlassianConfig, auth_header: str, issue_key: str) -> list:
     """Return changelog history entries for a single issue (up to 100)."""
     resp = requests.get(
-        f"{config.url}/rest/api/3/issue/{issue_key}/changelog",
+        f"{config.jira_api_base}/rest/api/3/issue/{issue_key}/changelog",
         headers={"Authorization": auth_header, "Accept": "application/json"},
         params={"maxResults": 100},
         timeout=15,
