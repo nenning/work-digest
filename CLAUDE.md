@@ -58,62 +58,20 @@ digest/state.py         Per-source last-run timestamps in ~/.digest/state.json
 digest/summarizer.py    LLM abstraction (OpenAI / Azure OpenAI / Anthropic)
 digest/email_sender.py  Jinja2 HTML rendering; Graph API send or COM Outlook draft
 digest/auth/
-  atlassian.py          Auth header + API base URL resolution for Jira/Confluence — supports
-                        both classic API tokens (Basic email:token, direct to the tenant
-                        domain) and scoped API tokens (Bearer, routed through
-                        api.atlassian.com/ex/{jira,confluence}/{cloudId}/... — see
-                        `atlassian.auth_type` in Configuration)
+  atlassian.py          Auth header + API base URL resolution for Jira/Confluence — classic
+                        vs. scoped API tokens. Details: docs/architecture/atlassian-auth.md
   microsoft.py          MSAL device code flow; token cache at ~/.digest/token_cache.bin
 digest/sources/
-  jira.py               Watched tickets (watcher = currentUser()); per-ticket changelog
-                        via GET /issue/{key}/changelog; detects @mentions in ADF;
-                        per-ticket priority: mentions > comments/desc changes > field changes;
-                        field changes merged to initial→final state (net-zero dropped); multi-value
-                        fields (e.g. fixVersions) log a value swap as two changelog items in the
-                        same history — a removal (toString empty) and an addition (fromString
-                        empty) — which are paired into one net from→to per history before merging
-                        across histories, otherwise a stray removal fragment can be picked up as
-                        the final value instead of what was actually left in place;
-                        new tickets via separate JQL query; JQL search paginates via
-                        nextPageToken/isLast (POST /rest/api/3/search/jql); merged comment,
-                        mention, and field_change items credit every distinct author involved
-                        (comma-joined), not just whoever's edit landed last — field_change
-                        authorship is drawn from the pre-merge per-history entries so someone's
-                        in-window edit to a field still counts even if it was later netted out
-                        as a no-op
-  confluence.py         Mentions + page updates (CQL); deduplicates per page; CQL search
-                        paginates via `_links.next` cursor (Confluence Cloud ignores a
-                        client-incremented `start` past page 1 — verified against a live
-                        instance that start=0/50/100 all return the same first page);
-                        page_update author is every distinct editor within the window
-                        (comma-joined), not just the current version's — the backward walk
-                        to the pre-window baseline already fetches each intermediate
-                        version's metadata to check its timestamp, so collecting the `by`
-                        field along the way is free (same idea as mgmt_confluence.py's
-                        `_walk_version_history`, without the team-account-id filter)
+  jira.py               Watched tickets; changelog-based mention/comment/field-change
+                        detection. Details: docs/architecture/jira.md
+  confluence.py         Mentions + page updates (CQL), deduplicated per page.
+                        Details: docs/architecture/confluence.md
   teams.py              Channel messages + DMs via Graph API
   outlook.py            Inbox messages via Graph API
-  mgmt_jira.py          Management summary: paginated team ticket fetch (nextPageToken); sprint
-                        lookup via GET /rest/agile/1.0/board/{id}/sprint; kinds: ticket_done/wip/todo;
-                        ignore_users is checked against both assignee and reporter so an ignored
-                        account never enters team_account_ids
-  mgmt_confluence.py    Management summary: pages filtered by team accountIds (CQL contributor in,
-                        scoped to `confluence_spaces` — unscoped, this CQL clause scans the whole
-                        instance and is slow enough to look like a hang on a wide --since range),
-                        paginated via `_links.next` (same cursor scheme as confluence.py) with a
-                        200-page safety cap. The CQL has no upper `lastModified` bound — that field
-                        reflects the page's *live* latest version, so a page edited again after
-                        `until` (by anyone, team or not) would otherwise drop out of the search
-                        entirely and hide a team edit that happened well inside the window on an
-                        earlier version. A single version-history walk (`_walk_version_history`)
-                        instead resolves the latest version at or before `until` itself (skipping
-                        any later, out-of-window versions), collects every distinct team author who
-                        edited the page within the window (not just the first one found) in the same
-                        pass, and locates the pre-window baseline version; ignore_users is applied
-                        here too. The diff is computed against that resolved in-window version
-                        fetched explicitly by version number, not the page's current live body —
-                        otherwise a report over a past window (--sprint, --to) could pick up edits
-                        made after `until`.
+  mgmt_jira.py          Management summary: team ticket fetch + sprint lookup.
+                        Details: docs/architecture/mgmt-summary.md
+  mgmt_confluence.py    Management summary: team-authored Confluence page diffs.
+                        Details: docs/architecture/mgmt-summary.md
 digest/templates/
   digest.html.j2        Inline-CSS responsive HTML email template; shows `item.author`
                         next to the title for every item (all sources) when present
@@ -134,11 +92,9 @@ State is only written on a successful personal digest send, never on `--dry-run`
 - **Fallback model:** If the primary LLM call fails, `summarizer.py` retries with `fallback_model` if configured.
 - **Outlook priority:** Outlook items are classified as `action_needed / meeting_invite / fyi / info` and color-coded in the HTML template.
 - **URL safety:** `email_sender.py` allows only `http`/`https` URLs to prevent `javascript:` injection.
-- **Management summary:** `--mgmt-summary` mode fetches all team tickets via a configurable `mgmt_summary.jira_jql`, derives team members from assignee/reporter accountIds (skipping ignored users on either field), fetches Confluence pages contributed to by those accountIds (CQL `contributor in (...)`, scoped to `confluence_spaces`, version-history walk to credit every team author who edited within the window and diff the resolved in-window version against the pre-window baseline — or against "" for brand-new pages). A page's `author` field is a comma-joined list when multiple team members edited it. Each page's diff is summarized in 1-2 sentences via `summarizer.summarize_items()` (identical to personal digest page-update handling, including the cosmetic-only skip). Jira tickets are NOT individually summarized. A final single free-text LLM call (`synthesize_mgmt_summary()`) produces a 2–3 paragraph narrative from the ticket lists and the per-page summaries. The `--assume-done` flag instructs the LLM to present in-progress and todo tickets as completed.
-- **Sprint lookup:** Paginates `GET /rest/agile/1.0/board/{boardId}/sprint` with case-insensitive name match. Requires `mgmt_summary.jira_board_id` in config.
-- **Verbose diagnostics:** `--verbose` sets logging to DEBUG, enables raw HTTP wire logging (`http.client.HTTPConnection.debuglevel = 1`) and urllib3 debug logging, and turns on per-page timing/progress logs in `mgmt_confluence.py`. Added after a management-summary hang turned out to be Confluence Cloud's CQL search silently ignoring a client-incremented `start` past page 1.
+- **Management summary:** `--mgmt-summary` mode synthesizes a narrative from team Jira tickets + team-authored Confluence page diffs. Details: docs/architecture/mgmt-summary.md
 - **No unbounded external calls:** every `requests.get/post` call passes `timeout=`. `smtplib.SMTP(...)` and `msal.PublicClientApplication(...)` also get an explicit `timeout` — both default to none at all otherwise, which blocks forever on a hung connection (the M365 silent-refresh path runs on every scheduled run, so this matters even outside `--setup-auth`). The OpenAI/Anthropic clients in `summarizer.py` get `timeout=` (and `max_retries=0`, since callers already fail over to the next configured model rather than wanting the SDK to retry the same one) — `synthesize_mgmt_summary()`'s single large narrative call gets a bigger timeout (`max(llm_timeout * 3, 90)`) than the per-item path's `config.llm_timeout`, since it previously had no timeout at all and reusing the small per-item value risked spurious failures on a legitimately slower large generation.
-- **Atlassian auth (classic vs. scoped tokens):** `atlassian.auth_type` (default `classic`) selects the auth scheme. Classic API tokens use `Basic base64(email:token)` sent directly to the tenant domain (`atlassian.url`) — this covers both personal accounts and service accounts using a classic token. Scoped API tokens (id.atlassian.com's "API tokens with scopes" flow) use `Bearer <token>` and must be routed through `https://api.atlassian.com/ex/{jira,confluence}/{cloudId}/...` instead — Atlassian rejects them under Basic auth against the tenant domain with a 401 regardless of which email/username is paired with them. `resolve_atlassian_config()` in `auth/atlassian.py` resolves this once at startup: for `auth_type: scoped` it resolves `cloud_id` (from config, or via the tenant's public unauthenticated `{url}/_edge/tenant_info` endpoint) and sets `AtlassianConfig.jira_api_base`/`confluence_api_base` to the `api.atlassian.com` routes; for `classic` these default to `url` via `__post_init__`, so nothing changes. All Jira/Confluence REST calls in `sources/*.py` use `jira_api_base`/`confluence_api_base` — human-facing links (`/browse/{key}`, page `webui` links) always use the real `url` instead, since those must stay on the tenant domain regardless of auth scheme. A scoped token needs Jira **and** Confluence scopes granted separately — one without the other fails only that product's calls with a scope error (`401 Unauthorized; scope does not match` on `/wiki/rest/api/...`), which is a token-configuration problem to fix at id.atlassian.com, not something the code works around.
+- **Atlassian auth (classic vs. scoped tokens):** `atlassian.auth_type` selects Basic-vs-Bearer auth and tenant-domain-vs-api.atlassian.com routing. Details: docs/architecture/atlassian-auth.md
 
 ## Configuration
 
