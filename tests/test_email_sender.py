@@ -11,7 +11,7 @@ from digest.email_sender import (
     TEMPLATES_DIR, _render_html, _safe_url,
     send_via_smtp, send_mgmt_summary_via_smtp,
 )
-from digest.models import SourceItem, SummarizedItem
+from digest.models import MgmtSection, SourceItem, SummarizedItem
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +237,16 @@ def _make_source_item(kind: str = "ticket_done") -> SourceItem:
     )
 
 
+def _make_mgmt_section(name="Project One") -> MgmtSection:
+    return MgmtSection(
+        name=name,
+        label="2026-05-01 - 2026-05-31",
+        narrative="Team did great work.",
+        jira_items=[_make_source_item()],
+        confluence_items=[],
+    )
+
+
 def test_smtp_mgmt_summary_dry_run_sends_preview_to_sender(capsys):
     mock_smtp = MagicMock()
     mock_smtp.__enter__ = lambda s: s
@@ -248,9 +258,7 @@ def test_smtp_mgmt_summary_dry_run_sends_preview_to_sender(capsys):
         patch("keyring.get_password", return_value="secret"),
     ):
         result = send_mgmt_summary_via_smtp(
-            narrative="Team did great work.",
-            jira_items=[_make_source_item()],
-            confluence_items=[],
+            sections=[_make_mgmt_section()],
             subject="[Team Summary]",
             config=_default_config(),
             smtp_cfg=smtp_cfg,
@@ -273,9 +281,7 @@ def test_smtp_mgmt_summary_sends():
         patch("keyring.get_password", return_value="secret"),
     ):
         result = send_mgmt_summary_via_smtp(
-            narrative="Team did great work.",
-            jira_items=[_make_source_item()],
-            confluence_items=[],
+            sections=[_make_mgmt_section()],
             subject="[Team Summary]",
             config=_default_config(),
             smtp_cfg=_default_smtp(),
@@ -283,6 +289,28 @@ def test_smtp_mgmt_summary_sends():
         )
     assert result is True
     mock_smtp.sendmail.assert_called_once()
+
+
+def test_smtp_mgmt_summary_multiple_sections_all_rendered():
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        result = send_mgmt_summary_via_smtp(
+            sections=[_make_mgmt_section("Project One"), _make_mgmt_section("Project Two")],
+            subject="[Team Summary]",
+            config=_default_config(),
+            smtp_cfg=_default_smtp(),
+            recipient="user@example.com",
+        )
+    assert result is True
+    html_body = mock_smtp.sendmail.call_args.args[2]
+    assert "Project One" in html_body
+    assert "Project Two" in html_body
 
 
 # ---------------------------------------------------------------------------

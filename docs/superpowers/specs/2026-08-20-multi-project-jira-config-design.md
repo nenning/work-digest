@@ -53,7 +53,6 @@ atlassian:
       mgmt_summary:                                # optional -- omitting excludes this project from --mgmt-summary
         jira_jql_extra: '...'                      # optional, AND'd onto "project = EGOV" + global mgmt_summary.jira_jql
         jira_board_id: 123                         # optional, required only for --sprint on this project
-        recipient: ...                             # optional override of mgmt_summary.recipient for this project
       # url: https://other-tenant.atlassian.net    # optional -- overrides atlassian.url for this project's requests only
 
     - name: OTHER
@@ -90,7 +89,6 @@ class ProjectConfluenceConfig:
 class ProjectMgmtSummaryConfig:
     jira_jql_extra: Optional[str] = None
     jira_board_id: Optional[int] = None
-    recipient: Optional[str] = None
 
 @dataclass
 class ProjectConfig:
@@ -151,7 +149,9 @@ MgmtSummaryConfig` that builds the effective per-project config:
 - `jira_jql` = the AND-combined expression above
 - `jira_board_id` = `project.mgmt_summary.jira_board_id`
 - `ignore_users` / `ignore_issue_types` = `global_cfg`'s (global, unchanged)
-- `recipient` = `project.mgmt_summary.recipient or global_cfg.recipient`
+
+`recipient` stays a single global setting (`mgmt_summary.recipient`, falling
+back to `email.recipient`) — no per-project override.
 
 `fetch_team_tickets` and `fetch_sprint` keep their existing signatures —
 they already accept a `MgmtSummaryConfig`/`board_id` directly, so the
@@ -179,12 +179,9 @@ per-project resolution happens one level up.
    pages.
 4. If no project produced anything, print "Nothing found" and return (same
    as today).
-5. Group the resulting per-project sections by *effective recipient*
-   (`project.mgmt_summary.recipient or mgmt_summary.recipient or
-   email.recipient`) and send one email per distinct recipient, each
-   containing the sections for the projects that share it. In the common
-   case (no per-project recipient override) this is exactly one email with
-   all project sections, matching the earlier agreed behavior.
+5. Send **one email** containing all project sections, to
+   `mgmt_summary.recipient or email.recipient` (recipient is a single global
+   setting, no per-project override).
 6. The email subject/header uses a run-level label (the sprint name, or the
    since/until range) rather than a single resolved date span, since
    per-project sprint dates can differ; each section shows its own resolved

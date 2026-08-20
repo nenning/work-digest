@@ -1,5 +1,10 @@
 # Jira source (`digest/sources/jira.py`)
 
+Loops `config.atlassian.projects`, running one JQL query per project (`config.for_project()`
+scopes `AtlassianConfig` to that project's own `url`/API bases) — both for watched tickets
+and for new tickets. Each project's `jql_extra` is AND'd only onto that project's own query,
+not onto a combined cross-project one.
+
 Watched tickets (`watcher = currentUser()`); per-ticket changelog via `GET
 /issue/{key}/changelog`; detects @mentions in ADF.
 

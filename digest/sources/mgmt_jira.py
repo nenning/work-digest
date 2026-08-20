@@ -1,12 +1,30 @@
 """Team Jira fetcher for management summary mode."""
 from __future__ import annotations
 
+import dataclasses
 import requests
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Tuple
 
-from digest.config import AtlassianConfig, MgmtSummaryConfig
+from digest.config import AtlassianConfig, MgmtSummaryConfig, ProjectConfig
 from digest.models import SourceItem
+
+
+def resolve_project_mgmt_config(project: ProjectConfig, global_cfg: MgmtSummaryConfig) -> MgmtSummaryConfig:
+    """Build the effective per-project management-summary config.
+
+    The project's own Jira key plus its optional extra filter are AND'd onto the
+    shared/global base JQL ("the top jql"). ignore_users/ignore_issue_types stay
+    the shared global values -- there's no per-project override for those.
+    jira_board_id and recipient are read directly off the project/global config
+    where needed (sprint lookup, email delivery), not through this object.
+    """
+    parts = [f"project = {project.jira.project}"]
+    if global_cfg.jira_jql:
+        parts.append(f"({global_cfg.jira_jql})")
+    if project.mgmt_summary and project.mgmt_summary.jira_jql_extra:
+        parts.append(f"({project.mgmt_summary.jira_jql_extra})")
+    return dataclasses.replace(global_cfg, jira_jql=" AND ".join(parts))
 
 
 def fetch_sprint(

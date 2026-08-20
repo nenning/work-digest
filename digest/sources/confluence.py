@@ -19,14 +19,34 @@ _SPACE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]*$")
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
     # Confluence CQL requires "YYYY-MM-DD HH:MM" format — the T-separator is not accepted.
     since_cql = since.astimezone().strftime("%Y-%m-%d %H:%M")
-    _validate_space_keys(config.confluence_spaces)
     items: List[SourceItem] = []
-    user_account_id = _get_account_id(config, auth_header)
-    # mentions use "created >" (when the mention was added)
-    # page updates use "lastModified >" (when the page was last edited)
-    items.extend(_fetch_mentions(config, auth_header, user_account_id, since_cql))
-    items.extend(_fetch_page_updates(config, auth_header, since_cql, since))
+    for group_config in _group_by_url(config):
+        _validate_space_keys(group_config.confluence_spaces)
+        user_account_id = _get_account_id(group_config, auth_header)
+        # mentions use "created >" (when the mention was added)
+        # page updates use "lastModified >" (when the page was last edited)
+        items.extend(_fetch_mentions(group_config, auth_header, user_account_id, since_cql))
+        items.extend(_fetch_page_updates(group_config, auth_header, since_cql, since))
     return _merge_by_page(items)
+
+
+def _group_by_url(config: AtlassianConfig) -> List[AtlassianConfig]:
+    """Group config.projects by effective URL, one resolved sub-config per group.
+
+    Mention-search isn't space-scoped -- it's one CQL query per site -- so grouping
+    by URL keeps it to one call per distinct Atlassian site rather than one per
+    project. In the common case (no project overrides `url`), this is a single
+    group containing every project, matching pre-multi-project behavior exactly.
+    """
+    groups: dict = {}
+    order: List[str] = []
+    for project in config.projects:
+        url = config.for_project(project).url
+        if url not in groups:
+            groups[url] = []
+            order.append(url)
+        groups[url].append(project)
+    return [config.for_projects(groups[url]) for url in order]
 
 
 def _validate_space_keys(keys: List[str]) -> None:

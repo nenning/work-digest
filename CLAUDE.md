@@ -56,7 +56,7 @@ digest/templates/
 
 **Personal digest data flow:** `main.py` → parallel fetch (ThreadPoolExecutor, 4 workers) → merge all `SourceItem` lists → `summarizer.summarize_items()` → `email_sender.send()` or local draft → update `state.json`.
 
-**Management summary data flow:** `main.py --mgmt-summary` → resolve time range (sprint/since/from-to) → `mgmt_jira.fetch_team_tickets()` → derive team_account_ids → `mgmt_confluence.fetch_team_pages()` (diffed page content, incl. brand-new pages) → `summarizer.summarize_items()` (same per-page 1-2 sentence LLM summary as the personal digest) → `summarizer.synthesize_mgmt_summary()` (single LLM call, free-text narrative) → `email_sender.send_mgmt_summary()`. State is never updated.
+**Management summary data flow:** `main.py --mgmt-summary` loops every `atlassian.projects` entry with a `mgmt_summary` block: resolve that project's own time range (sprint/since/from-to; `--sprint` looks up the sprint on the project's own `jira_board_id`) → `mgmt_jira.fetch_team_tickets()` → derive team_account_ids → `mgmt_confluence.fetch_team_pages()` (diffed page content, incl. brand-new pages) → `summarizer.summarize_items()` (same per-page 1-2 sentence LLM summary as the personal digest) → `summarizer.synthesize_mgmt_summary()` (single LLM call, free-text narrative) → one section per project. All sections are sent as one email via `email_sender.send_mgmt_summary()`. State is never updated.
 
 State is only written on a successful personal digest send, never on `--dry-run` and never in `--mgmt-summary` mode.
 
@@ -68,13 +68,13 @@ State is only written on a successful personal digest send, never on `--dry-run`
 - **Fallback model:** If the primary LLM call fails, `summarizer.py` retries with `fallback_model` if configured.
 - **Outlook priority:** Outlook items are classified as `action_needed / meeting_invite / fyi / info` and color-coded in the HTML template.
 - **URL safety:** `email_sender.py` allows only `http`/`https` URLs to prevent `javascript:` injection.
-- **Management summary:** `--mgmt-summary` mode synthesizes a narrative from team Jira tickets + team-authored Confluence page diffs. Details: docs/architecture/mgmt-summary.md
+- **Management summary:** `--mgmt-summary` mode synthesizes a narrative per project (each `atlassian.projects` entry with a `mgmt_summary` block) from that project's Jira tickets + team-authored Confluence page diffs, and sends them as one email with one section per project. Details: docs/architecture/mgmt-summary.md
 - **No unbounded external calls:** every `requests.get/post` call passes `timeout=`. `smtplib.SMTP(...)` and `msal.PublicClientApplication(...)` also get an explicit `timeout` — both default to none at all otherwise, which blocks forever on a hung connection (the M365 silent-refresh path runs on every scheduled run, so this matters even outside `--setup-auth`). The OpenAI/Anthropic clients in `summarizer.py` get `timeout=` (and `max_retries=0`, since callers already fail over to the next configured model rather than wanting the SDK to retry the same one) — `synthesize_mgmt_summary()`'s single large narrative call gets a bigger timeout (`max(llm_timeout * 3, 90)`) than the per-item path's `config.llm_timeout`, since it previously had no timeout at all and reusing the small per-item value risked spurious failures on a legitimately slower large generation.
 - **Atlassian auth (classic vs. scoped tokens):** `atlassian.auth_type` selects Basic-vs-Bearer auth and tenant-domain-vs-api.atlassian.com routing. Details: docs/architecture/atlassian-auth.md
 
 ## Configuration
 
-Copy `digest/config.yaml.example` → `digest/config.yaml`. Required fields: Atlassian URL/email/token, LLM provider/key/model, `schedule.times`. Optional: `m365` block (tenant_id, client_id), `llm.endpoint` for Azure, `llm.fallback_model`, `atlassian.auth_type`/`atlassian.cloud_id` (see above — only needed for scoped API tokens). For management summary: `mgmt_summary` block with at minimum `jira_jql`.
+Copy `digest/config.yaml.example` → `digest/config.yaml`. Required fields: Atlassian URL/email/token, `atlassian.projects` (each with `name` + `jira.project`), LLM provider/key/model, `schedule.times`. Optional: `m365` block (tenant_id, client_id), `llm.endpoint` for Azure, `llm.fallback_model`, `atlassian.auth_type`/`atlassian.cloud_id` (see above — only needed for scoped API tokens). For management summary: at least one project needs a `mgmt_summary` block; the top-level `mgmt_summary` block (shared `jira_jql`, `ignore_users`, `ignore_issue_types`, `recipient`) is optional.
 
 ## Testing
 

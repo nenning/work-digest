@@ -46,6 +46,15 @@
     .tickets-header::after {
       content: ""; flex: 1; height: 1px; background: #e2e8f0;
     }
+    .section + .section {
+      border-top: 8px solid #f1f5f9;
+    }
+    .section-header {
+      padding: 18px 28px 0;
+      display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    }
+    .section-header h2 { margin: 0; font-size: 15px; font-weight: 700; color: #0f172a; }
+    .section-header .section-label { font-size: 12px; color: #94a3b8; white-space: nowrap; }
     .status-group { margin-bottom: 18px; }
     .status-label {
       font-size: 11px; font-weight: 700; text-transform: uppercase;
@@ -123,73 +132,84 @@
         </div>
         {% endif %}
 
-        <div class="narrative">
-          {% if bullet_items %}
-          <ul class="narrative-bullets">
-            {% for item in bullet_items %}<li>{{ item }}</li>{% endfor %}
-          </ul>
-          {% else %}
-          {% for para in narrative_paragraphs %}<p>{{ para }}</p>{% endfor %}
-          {% endif %}
-        </div>
-
-        {% if done_tickets or wip_tickets or todo_tickets or confluence_items %}
-        <div class="tickets-section">
-          <div class="tickets-header">Supporting detail</div>
-
-          {% if done_tickets %}
-          <div class="status-group">
-            <div class="status-label"><span class="dot dot-done"></span> Done ({{ done_tickets|length }})</div>
-            {% for item in done_tickets %}
-            <div class="ticket-row">
-              <div class="ticket-title"><a href="{{ item.url | safe_url }}">{{ item.title }}</a></div>
-              <div class="ticket-meta">{{ item.author }}</div>
-            </div>
-            {% endfor %}
+        {% for section in sections %}
+        <div class="section">
+          {% if sections|length > 1 %}
+          <div class="section-header">
+            <h2>{{ section.name }}</h2>
+            <span class="section-label">{{ section.label }}</span>
           </div>
           {% endif %}
 
-          {% if wip_tickets %}
-          <div class="status-group">
-            <div class="status-label"><span class="dot dot-wip"></span> In Progress ({{ wip_tickets|length }})</div>
-            {% for item in wip_tickets %}
-            <div class="ticket-row">
-              <div class="ticket-title"><a href="{{ item.url | safe_url }}">{{ item.title }}</a></div>
-              <div class="ticket-meta">{{ item.author }}</div>
-            </div>
-            {% endfor %}
+          <div class="narrative">
+            {% if section.bullet_items %}
+            <ul class="narrative-bullets">
+              {% for item in section.bullet_items %}<li>{{ item }}</li>{% endfor %}
+            </ul>
+            {% else %}
+            {% for para in section.narrative_paragraphs %}<p>{{ para }}</p>{% endfor %}
+            {% endif %}
           </div>
-          {% endif %}
 
-          {% if todo_tickets %}
-          <div class="status-group">
-            <div class="status-label"><span class="dot dot-todo"></span> To Do ({{ todo_tickets|length }})</div>
-            {% for item in todo_tickets %}
-            <div class="ticket-row">
-              <div class="ticket-title"><a href="{{ item.url | safe_url }}">{{ item.title }}</a></div>
-              <div class="ticket-meta">{{ item.author }}</div>
-            </div>
-            {% endfor %}
-          </div>
-          {% endif %}
+          {% if section.done_tickets or section.wip_tickets or section.todo_tickets or section.confluence_items %}
+          <div class="tickets-section">
+            <div class="tickets-header">Supporting detail</div>
 
-          {% if confluence_items %}
-          <div class="status-group">
-            <div class="status-label">📄 Documentation ({{ confluence_items|length }} page{{ 's' if confluence_items|length != 1 }})</div>
-            {% for item in confluence_items %}
-            <div class="item">
-              <div class="item-title">
-                <a href="{{ item.url | safe_url }}">{{ item.title }}</a>
-                <span class="item-meta">{{ item.author }}</span>
+            {% if section.done_tickets %}
+            <div class="status-group">
+              <div class="status-label"><span class="dot dot-done"></span> Done ({{ section.done_tickets|length }})</div>
+              {% for item in section.done_tickets %}
+              <div class="ticket-row">
+                <div class="ticket-title"><a href="{{ item.url | safe_url }}">{{ item.title }}</a></div>
+                <div class="ticket-meta">{{ item.author }}</div>
               </div>
-              {% if item.summary %}<p class="item-summary">{{ item.summary }}</p>{% endif %}
+              {% endfor %}
             </div>
-            {% endfor %}
+            {% endif %}
+
+            {% if section.wip_tickets %}
+            <div class="status-group">
+              <div class="status-label"><span class="dot dot-wip"></span> In Progress ({{ section.wip_tickets|length }})</div>
+              {% for item in section.wip_tickets %}
+              <div class="ticket-row">
+                <div class="ticket-title"><a href="{{ item.url | safe_url }}">{{ item.title }}</a></div>
+                <div class="ticket-meta">{{ item.author }}</div>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if section.todo_tickets %}
+            <div class="status-group">
+              <div class="status-label"><span class="dot dot-todo"></span> To Do ({{ section.todo_tickets|length }})</div>
+              {% for item in section.todo_tickets %}
+              <div class="ticket-row">
+                <div class="ticket-title"><a href="{{ item.url | safe_url }}">{{ item.title }}</a></div>
+                <div class="ticket-meta">{{ item.author }}</div>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if section.confluence_items %}
+            <div class="status-group">
+              <div class="status-label">📄 Documentation ({{ section.confluence_items|length }} page{{ 's' if section.confluence_items|length != 1 }})</div>
+              {% for item in section.confluence_items %}
+              <div class="item">
+                <div class="item-title">
+                  <a href="{{ item.url | safe_url }}">{{ item.title }}</a>
+                  <span class="item-meta">{{ item.author }}</span>
+                </div>
+                {% if item.summary %}<p class="item-summary">{{ item.summary }}</p>{% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+
           </div>
           {% endif %}
-
         </div>
-        {% endif %}
+        {% endfor %}
 
         <div class="footer">
           AI-generated summary &middot; all titles link to originals

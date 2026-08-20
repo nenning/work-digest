@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
-from digest.config import AtlassianConfig
+from digest.config import AtlassianConfig, ProjectConfig, ProjectConfluenceConfig, ProjectJiraConfig
 from digest.sources.confluence import fetch, _validate_space_keys, _compute_diff, _storage_to_text
 
 SINCE = datetime(2026, 4, 9, 7, 0, 0, tzinfo=timezone.utc)
@@ -22,7 +22,11 @@ def make_config():
     return AtlassianConfig(
         url="https://example.atlassian.net",
         email="u@e.com", api_token="tok",
-        jira_projects=[], confluence_spaces=["ENG"],
+        projects=[ProjectConfig(
+            name="P1",
+            jira=ProjectJiraConfig(project="PROJ"),
+            confluence=ProjectConfluenceConfig(spaces=["ENG"]),
+        )],
     )
 
 
@@ -94,7 +98,7 @@ def test_cosmetic_only_page_skipped():
 
 def test_no_spaces_skips_page_updates():
     cfg = make_config()
-    cfg.confluence_spaces = []
+    cfg.projects[0].confluence.spaces = []
     responses = [
         make_mock({"accountId": "user-abc"}),
         make_mock({"results": []}),

@@ -1,6 +1,12 @@
 import pytest
 from pathlib import Path
-from digest.config import load_config
+from digest.config import (
+    AtlassianConfig,
+    ProjectConfig,
+    ProjectConfluenceConfig,
+    ProjectJiraConfig,
+    load_config,
+)
 
 
 VALID_YAML = """
@@ -8,8 +14,12 @@ atlassian:
   url: https://example.atlassian.net
   email: user@example.com
   api_token: tok123
-  jira_projects: [PROJ]
-  confluence_spaces: [ENG]
+  projects:
+    - name: Project One
+      jira:
+        project: PROJ
+      confluence:
+        spaces: [ENG]
 m365:
   tenant_id: abc-123
 llm:
@@ -30,11 +40,83 @@ def test_load_config(tmp_path):
     cfg_file.write_text(VALID_YAML)
     cfg = load_config(cfg_file)
     assert cfg.atlassian.url == "https://example.atlassian.net"
-    assert cfg.atlassian.jira_projects == ["PROJ"]
+    assert len(cfg.atlassian.projects) == 1
+    assert cfg.atlassian.projects[0].name == "Project One"
+    assert cfg.atlassian.projects[0].jira.project == "PROJ"
+    assert cfg.atlassian.projects[0].confluence.spaces == ["ENG"]
+    assert cfg.atlassian.confluence_spaces == ["ENG"]
     assert cfg.m365.tenant_id == "abc-123"
     assert cfg.llm.endpoint == "https://custom.endpoint/v1"
     assert cfg.schedule.times == ["08:00", "13:00"]
     assert cfg.email.subject_prefix == "[Work]"
+
+
+YAML_WITH_PROJECT_EXTRAS = """
+atlassian:
+  url: https://example.atlassian.net
+  email: user@example.com
+  api_token: tok123
+  projects:
+    - name: Project One
+      jira:
+        project: PROJ
+        jql_extra: '"Team[Team]" = abc'
+      confluence:
+        spaces: [ENG]
+      mgmt_summary:
+        jira_jql_extra: 'statusCategory != Done'
+        jira_board_id: 42
+llm:
+  provider: openai
+  api_key: sk-test
+  model: gpt-4o
+data_dir: ~/.digest
+"""
+
+
+def test_project_jql_extra_and_mgmt_summary_block(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(YAML_WITH_PROJECT_EXTRAS)
+    cfg = load_config(cfg_file)
+    project = cfg.atlassian.projects[0]
+    assert project.jira.jql_extra == '"Team[Team]" = abc'
+    assert project.mgmt_summary.jira_jql_extra == "statusCategory != Done"
+    assert project.mgmt_summary.jira_board_id == 42
+
+
+def test_project_without_mgmt_summary_block_is_none(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(VALID_YAML)
+    cfg = load_config(cfg_file)
+    assert cfg.atlassian.projects[0].mgmt_summary is None
+
+
+def test_project_missing_name_raises(tmp_path):
+    bad_yaml = VALID_YAML.replace("name: Project One", "not_name: Project One")
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(bad_yaml)
+    with pytest.raises(ValueError, match="name"):
+        load_config(cfg_file)
+
+
+def test_project_missing_jira_project_raises(tmp_path):
+    bad_yaml = VALID_YAML.replace("        project: PROJ", "        not_project: PROJ")
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(bad_yaml)
+    with pytest.raises(ValueError, match="jira.project"):
+        load_config(cfg_file)
+
+
+def test_no_projects_defaults_to_empty_list(tmp_path):
+    yaml_no_projects = VALID_YAML.replace(
+        "  projects:\n    - name: Project One\n      jira:\n        project: PROJ\n      confluence:\n        spaces: [ENG]\n",
+        "",
+    )
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml_no_projects)
+    cfg = load_config(cfg_file)
+    assert cfg.atlassian.projects == []
+    assert cfg.atlassian.confluence_spaces == []
 
 
 def test_m365_defaults_to_organizations(tmp_path):
@@ -153,3 +235,66 @@ def test_smtp_use_oauth2_loads(tmp_path):
     cfg_file.write_text(yaml)
     cfg = load_config(cfg_file)
     assert cfg.smtp.use_oauth2 is True
+
+
+# ---------------------------------------------------------------------------
+# AtlassianConfig.for_project / for_projects
+# ---------------------------------------------------------------------------
+
+def _make_atlassian(**overrides):
+    defaults = dict(url="https://example.atlassian.net", email="u@e.com", api_token="tok")
+    defaults.update(overrides)
+    return AtlassianConfig(**defaults)
+
+
+def _make_project(name="P1", jira_project="PROJ", spaces=None, url=None):
+    return ProjectConfig(
+        name=name,
+        jira=ProjectJiraConfig(project=jira_project),
+        confluence=ProjectConfluenceConfig(spaces=spaces or []),
+        url=url,
+    )
+
+
+def test_confluence_spaces_unions_all_projects():
+    config = _make_atlassian(projects=[
+        _make_project("P1", "PROJ", spaces=["ENG"]),
+        _make_project("P2", "OTHER", spaces=["DOC", "ENG"]),
+    ])
+    assert config.confluence_spaces == ["ENG", "DOC"]
+
+
+def test_for_project_narrows_to_single_project():
+    p1 = _make_project("P1", "PROJ", spaces=["ENG"])
+    p2 = _make_project("P2", "OTHER", spaces=["DOC"])
+    config = _make_atlassian(projects=[p1, p2])
+    scoped = config.for_project(p1)
+    assert scoped.projects == [p1]
+    assert scoped.confluence_spaces == ["ENG"]
+    assert scoped.url == config.url
+
+
+def test_for_project_without_url_override_keeps_global_url():
+    project = _make_project()
+    config = _make_atlassian(projects=[project])
+    scoped = config.for_project(project)
+    assert scoped.url == "https://example.atlassian.net"
+    assert scoped.jira_api_base == "https://example.atlassian.net"
+
+
+def test_for_project_with_url_override_replaces_url_and_api_bases():
+    project = _make_project(url="https://other-tenant.atlassian.net")
+    config = _make_atlassian(projects=[project])
+    scoped = config.for_project(project)
+    assert scoped.url == "https://other-tenant.atlassian.net"
+    assert scoped.jira_api_base == "https://other-tenant.atlassian.net"
+    assert scoped.confluence_api_base == "https://other-tenant.atlassian.net"
+
+
+def test_for_projects_groups_multiple_sharing_url():
+    p1 = _make_project("P1", "PROJ", spaces=["ENG"])
+    p2 = _make_project("P2", "OTHER", spaces=["DOC"])
+    config = _make_atlassian(projects=[p1, p2])
+    scoped = config.for_projects([p1, p2])
+    assert scoped.confluence_spaces == ["ENG", "DOC"]
+    assert scoped.url == config.url

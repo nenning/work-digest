@@ -96,10 +96,8 @@ def _linkify_remote_link(value: str, remote_links: list[dict]):
 
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
     since_str = since.astimezone().strftime("%Y-%m-%d %H:%M")
-    current_user = _get_current_user(config, auth_header)
-    account_id = current_user.get("accountId", "")
     items: List[SourceItem] = []
-    items.extend(_fetch_watched(config, auth_header, since, since_str, account_id))
+    items.extend(_fetch_watched(config, auth_header, since, since_str))
     items.extend(_fetch_new_tickets(config, auth_header, since_str))
     new_ticket_keys = {i.title.split(":")[0] for i in items if i.kind == "new_ticket"}
     return [i for i in items if not (i.kind != "new_ticket" and i.title.split(":")[0] in new_ticket_keys)]
@@ -125,10 +123,9 @@ def _append_extra(jql: str, extra: str | None) -> str:
     return jql + f" AND {extra}"
 
 
-def _validate_project_keys(keys: list[str]) -> None:
-    for key in keys:
-        if not re.match(r'^[A-Z][A-Z0-9]+$', key):
-            raise ValueError(f"Invalid Jira project key: {key!r}. Keys must match [A-Z][A-Z0-9]+")
+def _validate_project_key(key: str) -> None:
+    if not re.match(r'^[A-Z][A-Z0-9]+$', key):
+        raise ValueError(f"Invalid Jira project key: {key!r}. Keys must match [A-Z][A-Z0-9]+")
 
 
 def _jql_search(config: AtlassianConfig, auth_header: str, jql: str) -> list:
@@ -187,31 +184,31 @@ def _fetch_watched(
     auth_header: str,
     since: datetime,
     since_str: str,
-    account_id: str,
 ) -> List[SourceItem]:
-    if not config.jira_projects:
-        return []
-    _validate_project_keys(config.jira_projects)
-    projects = ", ".join(config.jira_projects)
-    issues = _jql_search(
-        config, auth_header,
-        _append_extra(
-            f'project in ({projects}) AND watcher = currentUser() AND updated >= "{since_str}"',
-            config.jira_jql_extra,
-        ),
-    )
-
     since_utc = since.astimezone(timezone.utc)
     items: List[SourceItem] = []
     summary_cache: dict = {}
 
-    for issue in issues:
-        key = issue["key"]
-        title = f"{key}: {issue['fields']['summary']}"
-        url = f"{config.url}/browse/{key}"
-        issue["changelog"] = {"histories": _fetch_issue_changelog(config, auth_header, key)}
-        candidates = _collect_candidates(issue, since_utc, account_id, title, url, config, auth_header, summary_cache)
-        items.extend(_deduplicate(candidates))
+    for project in config.projects:
+        _validate_project_key(project.jira.project)
+        pconf = config.for_project(project)
+        current_user = _get_current_user(pconf, auth_header)
+        account_id = current_user.get("accountId", "")
+        issues = _jql_search(
+            pconf, auth_header,
+            _append_extra(
+                f'project = {project.jira.project} AND watcher = currentUser() AND updated >= "{since_str}"',
+                project.jira.jql_extra,
+            ),
+        )
+
+        for issue in issues:
+            key = issue["key"]
+            title = f"{key}: {issue['fields']['summary']}"
+            url = f"{pconf.url}/browse/{key}"
+            issue["changelog"] = {"histories": _fetch_issue_changelog(pconf, auth_header, key)}
+            candidates = _collect_candidates(issue, since_utc, account_id, title, url, pconf, auth_header, summary_cache)
+            items.extend(_deduplicate(candidates))
 
     return items
 
@@ -461,32 +458,33 @@ def _has_mention(node, account_id: str) -> bool:
 
 
 def _fetch_new_tickets(config, auth_header, since_str) -> List[SourceItem]:
-    if not config.jira_projects:
-        return []
-    _validate_project_keys(config.jira_projects)
-    projects = ", ".join(config.jira_projects)
-    issues = _jql_search(
-        config, auth_header,
-        _append_extra(
-            f'project in ({projects}) AND created >= "{since_str}" ORDER BY created DESC',
-            config.jira_jql_extra,
-        ),
-    )
-    return [
-        SourceItem(
-            source="jira", kind="new_ticket",
-            title=f"{i['key']}: {i['fields']['summary']}",
-            url=f"{config.url}/browse/{i['key']}",
-            content=f"Reporter: {_display_name(i['fields'].get('reporter'))}. Assignee: {_display_name(i['fields'].get('assignee'))}.",
-            author=_display_name(i["fields"].get("reporter")),
-            timestamp=_parse_dt(i["fields"]["created"]),
-            metadata={
-                "assignee": _display_name(i["fields"].get("assignee")),
-                "description": _extract_text(i["fields"].get("description") or ""),
-            },
+    items: List[SourceItem] = []
+    for project in config.projects:
+        _validate_project_key(project.jira.project)
+        pconf = config.for_project(project)
+        issues = _jql_search(
+            pconf, auth_header,
+            _append_extra(
+                f'project = {project.jira.project} AND created >= "{since_str}" ORDER BY created DESC',
+                project.jira.jql_extra,
+            ),
         )
-        for i in issues
-    ]
+        items.extend(
+            SourceItem(
+                source="jira", kind="new_ticket",
+                title=f"{i['key']}: {i['fields']['summary']}",
+                url=f"{pconf.url}/browse/{i['key']}",
+                content=f"Reporter: {_display_name(i['fields'].get('reporter'))}. Assignee: {_display_name(i['fields'].get('assignee'))}.",
+                author=_display_name(i["fields"].get("reporter")),
+                timestamp=_parse_dt(i["fields"]["created"]),
+                metadata={
+                    "assignee": _display_name(i["fields"].get("assignee")),
+                    "description": _extract_text(i["fields"].get("description") or ""),
+                },
+            )
+            for i in issues
+        )
+    return items
 
 
 def _parse_dt(s: str) -> datetime:

@@ -2,7 +2,7 @@ import copy
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
-from digest.config import AtlassianConfig
+from digest.config import AtlassianConfig, ProjectConfig, ProjectJiraConfig
 from digest.sources.jira import (
     fetch, _extract_text, _display_name, _parse_dt, _append_extra, _has_mention,
     _merge_field_changes, _net_field_change, _jql_search,
@@ -13,7 +13,7 @@ def make_config():
     return AtlassianConfig(
         url="https://example.atlassian.net",
         email="u@e.com", api_token="tok",
-        jira_projects=["PROJ"], confluence_spaces=[],
+        projects=[ProjectConfig(name="P1", jira=ProjectJiraConfig(project="PROJ"))],
     )
 
 
@@ -438,7 +438,7 @@ def test_field_change_before_since_excluded():
 
 def test_empty_projects_returns_nothing():
     cfg = make_config()
-    cfg.jira_projects = []
+    cfg.projects = []
     mock_get, _ = _mock_responses([], user=CURRENT_USER)
     with patch("digest.sources.jira.requests.get", mock_get):
         items = fetch(cfg, "Basic xxx", SINCE)
@@ -447,7 +447,7 @@ def test_empty_projects_returns_nothing():
 
 def test_invalid_project_key_raises():
     cfg = make_config()
-    cfg.jira_projects = ["invalid key"]
+    cfg.projects = [ProjectConfig(name="P1", jira=ProjectJiraConfig(project="invalid key"))]
     mock_get, _ = _mock_responses([], user=CURRENT_USER)
     with patch("digest.sources.jira.requests.get", mock_get):
         with pytest.raises(ValueError, match="Invalid Jira project key"):
@@ -456,7 +456,7 @@ def test_invalid_project_key_raises():
 
 def test_jql_extra_appended():
     cfg = make_config()
-    cfg.jira_jql_extra = '"Team[Team]" = abc'
+    cfg.projects[0].jira.jql_extra = '"Team[Team]" = abc'
     mock_get, mock_post = _mock_responses([])
     with patch("digest.sources.jira.requests.get", mock_get), \
          patch("digest.sources.jira.requests.post", mock_post):

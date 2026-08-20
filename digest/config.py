@@ -1,3 +1,4 @@
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -12,13 +13,37 @@ VALID_AUTH_TYPES = {"classic", "scoped"}
 
 
 @dataclass
+class ProjectJiraConfig:
+    project: str
+    jql_extra: Optional[str] = None  # per project -- AND'd onto this project's personal-digest queries
+
+
+@dataclass
+class ProjectConfluenceConfig:
+    spaces: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ProjectMgmtSummaryConfig:
+    jira_jql_extra: Optional[str] = None  # AND'd onto "project = X" + the global mgmt_summary.jira_jql
+    jira_board_id: Optional[int] = None   # required only for --sprint on this project
+
+
+@dataclass
+class ProjectConfig:
+    name: str                                              # display label (mgmt-summary headings, logs)
+    jira: ProjectJiraConfig
+    confluence: ProjectConfluenceConfig = field(default_factory=ProjectConfluenceConfig)
+    mgmt_summary: Optional[ProjectMgmtSummaryConfig] = None  # omit to exclude this project from --mgmt-summary
+    url: Optional[str] = None                              # overrides atlassian.url for this project's requests only
+
+
+@dataclass
 class AtlassianConfig:
     url: str
     email: str
     api_token: str
-    jira_projects: List[str]
-    confluence_spaces: List[str]
-    jira_jql_extra: Optional[str] = None  # per AND an alle Jira-Queries angehängt
+    projects: List[ProjectConfig] = field(default_factory=list)
     auth_type: AuthType = "classic"       # "classic" = Basic email:token; "scoped" = Bearer token
     cloud_id: Optional[str] = None        # only used for auth_type "scoped"; auto-resolved if unset
     # Resolved API roots -- default to `url` (classic behavior). For "scoped" auth,
@@ -32,6 +57,40 @@ class AtlassianConfig:
             self.jira_api_base = self.url
         if self.confluence_api_base is None:
             self.confluence_api_base = self.url
+
+    @property
+    def confluence_spaces(self) -> List[str]:
+        """Union of every project's Confluence spaces, in first-seen order."""
+        seen: List[str] = []
+        for p in self.projects:
+            for s in p.confluence.spaces:
+                if s not in seen:
+                    seen.append(s)
+        return seen
+
+    def for_project(self, project: ProjectConfig) -> "AtlassianConfig":
+        """Return a copy of this config scoped to a single project. See for_projects()."""
+        return self.for_projects([project])
+
+    def for_projects(self, projects: List[ProjectConfig]) -> "AtlassianConfig":
+        """Return a copy of this config scoped to a group of projects that share
+        the same effective URL (e.g. via _group_by_url in confluence.py).
+
+        `confluence_spaces` narrows to the union of just these projects' spaces.
+        If (the first of) these projects overrides `url`, that URL becomes both
+        the human-facing `url` and the API bases (mirroring how __post_init__
+        derives the global api bases from `url` for classic auth) -- a project
+        url override is not re-resolved through the scoped-auth cloud_id flow,
+        so `auth_type: scoped` + a per-project url is a known unsupported
+        combination rather than one silently getting the wrong cloud_id's routes.
+        """
+        project_url = projects[0].url if projects else None
+        if project_url is None:
+            return dataclasses.replace(self, projects=projects)
+        url = project_url.rstrip("/")
+        return dataclasses.replace(
+            self, projects=projects, url=url, jira_api_base=url, confluence_api_base=url
+        )
 
 
 @dataclass
@@ -75,11 +134,10 @@ class SmtpConfig:
 
 @dataclass
 class MgmtSummaryConfig:
-    jira_jql: str                            # base JQL that defines the team's tickets
-    jira_board_id: Optional[int] = None      # board ID required for --sprint lookup
-    ignore_users: List[str] = field(default_factory=list)   # display names to exclude
-    ignore_issue_types: List[str] = field(default_factory=list)  # issue types to skip
-    recipient: Optional[str] = None          # override send-to (empty = same as normal digest)
+    jira_jql: Optional[str] = None           # optional shared/base clause ("the top jql"), AND'd for every project
+    ignore_users: List[str] = field(default_factory=list)   # display names to exclude -- global
+    ignore_issue_types: List[str] = field(default_factory=list)  # issue types to skip -- global
+    recipient: Optional[str] = None          # override send-to (empty = same as normal digest) -- global
 
 
 @dataclass
@@ -91,7 +149,7 @@ class Config:
     email: EmailConfig
     data_dir: Path
     language: str = "de"  # ISO 639-1 code; used for LLM output language
-    mgmt_summary: Optional[MgmtSummaryConfig] = None
+    mgmt_summary: MgmtSummaryConfig = field(default_factory=MgmtSummaryConfig)
     smtp: Optional[SmtpConfig] = None
 
 
@@ -108,19 +166,47 @@ def _load_smtp(raw: Optional[dict]) -> Optional[SmtpConfig]:
     )
 
 
-def _load_mgmt_summary(raw: Optional[dict]) -> Optional[MgmtSummaryConfig]:
+def _load_mgmt_summary(raw: Optional[dict]) -> MgmtSummaryConfig:
     if not raw:
-        return None
-    jql = raw.get("jira_jql")
-    if not jql:
-        raise ValueError("mgmt_summary.jira_jql is required when mgmt_summary is configured")
-    board_id = raw.get("jira_board_id")
+        return MgmtSummaryConfig()
     return MgmtSummaryConfig(
-        jira_jql=jql,
-        jira_board_id=int(board_id) if board_id is not None else None,
+        jira_jql=raw.get("jira_jql"),
         ignore_users=raw.get("ignore_users") or [],
         ignore_issue_types=raw.get("ignore_issue_types") or [],
         recipient=raw.get("recipient") or None,
+    )
+
+
+def _load_project(raw: dict) -> ProjectConfig:
+    name = raw.get("name")
+    if not name:
+        raise ValueError("Each atlassian.projects entry requires a name")
+
+    jira_raw = raw.get("jira") or {}
+    jira_project = jira_raw.get("project")
+    if not jira_project:
+        raise ValueError(f"atlassian.projects[{name!r}].jira.project is required")
+
+    confluence_raw = raw.get("confluence") or {}
+
+    mgmt_raw = raw.get("mgmt_summary")
+    mgmt_summary = None
+    if mgmt_raw is not None:
+        board_id = mgmt_raw.get("jira_board_id")
+        mgmt_summary = ProjectMgmtSummaryConfig(
+            jira_jql_extra=mgmt_raw.get("jira_jql_extra"),
+            jira_board_id=int(board_id) if board_id is not None else None,
+        )
+
+    return ProjectConfig(
+        name=name,
+        jira=ProjectJiraConfig(
+            project=jira_project,
+            jql_extra=jira_raw.get("jql_extra"),
+        ),
+        confluence=ProjectConfluenceConfig(spaces=confluence_raw.get("spaces") or []),
+        mgmt_summary=mgmt_summary,
+        url=raw.get("url"),
     )
 
 
@@ -153,9 +239,7 @@ def load_config(path: Path) -> Config:
             url=a["url"].rstrip("/"),
             email=a["email"],
             api_token=a["api_token"],
-            jira_projects=a.get("jira_projects", []),
-            confluence_spaces=a.get("confluence_spaces", []),
-            jira_jql_extra=a.get("jira_jql_extra"),
+            projects=[_load_project(p) for p in (a.get("projects") or [])],
             auth_type=auth_type,
             cloud_id=a.get("cloud_id"),
         ),

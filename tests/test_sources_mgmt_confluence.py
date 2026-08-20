@@ -2,7 +2,13 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from digest.config import AtlassianConfig, MgmtSummaryConfig
+from digest.config import (
+    AtlassianConfig,
+    MgmtSummaryConfig,
+    ProjectConfig,
+    ProjectConfluenceConfig,
+    ProjectJiraConfig,
+)
 from digest.sources.mgmt_confluence import fetch_team_pages
 
 
@@ -11,8 +17,6 @@ def make_atlassian_config() -> AtlassianConfig:
         url="https://example.atlassian.net",
         email="u@e.com",
         api_token="tok",
-        jira_projects=[],
-        confluence_spaces=[],
     )
 
 
@@ -369,8 +373,16 @@ def test_fetch_team_pages_scopes_cql_to_configured_spaces():
     """Without a space restriction, 'contributor in (...)' scans the whole instance
     and is slow enough to look like a hang on a wide --since range. It must be
     scoped the same way the personal digest's confluence.py scopes its search."""
-    config = make_atlassian_config()
-    config.confluence_spaces = ["ENG", "DOC"]
+    config = AtlassianConfig(
+        url="https://example.atlassian.net",
+        email="u@e.com",
+        api_token="tok",
+        projects=[ProjectConfig(
+            name="P1",
+            jira=ProjectJiraConfig(project="TEAM"),
+            confluence=ProjectConfluenceConfig(spaces=["ENG", "DOC"]),
+        )],
+    )
     captured_cql = {}
 
     def fake_get(url, headers=None, params=None, timeout=None):

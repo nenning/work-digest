@@ -28,9 +28,9 @@ from digest.email_sender import (
     send_via_smtp, send_via_com,
     send_mgmt_summary_via_smtp, send_mgmt_summary_via_com,
 )
-from digest.models import SourceItem, SummarizedItem
+from digest.models import MgmtSection, SourceItem, SummarizedItem
 from digest.sources import confluence, jira, outlook, teams
-from digest.sources.mgmt_jira import fetch_sprint, fetch_team_tickets
+from digest.sources.mgmt_jira import fetch_sprint, fetch_team_tickets, resolve_project_mgmt_config
 from digest.sources.mgmt_confluence import fetch_team_pages
 from digest.state import get_last_run, load_state, process_lock, save_state
 from digest.summarizer import LLMEndpointError, summarize_items, synthesize_mgmt_summary
@@ -224,11 +224,11 @@ def main() -> None:
 
 
 def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None:
-    mgmt_cfg = config.mgmt_summary
-    if mgmt_cfg is None:
+    mgmt_projects = [p for p in config.atlassian.projects if p.mgmt_summary]
+    if not mgmt_projects:
         raise RuntimeError(
-            "mgmt_summary section is missing from config.yaml. "
-            "Add it with at least jira_jql set to define the team's tickets."
+            "No project in atlassian.projects has a mgmt_summary block configured. "
+            "Add one to at least one project to use --mgmt-summary."
         )
 
     # Validate mutually exclusive time options
@@ -243,6 +243,14 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             "Use --sprint 'Sprint Name', --since 7d, or --from/--to."
         )
 
+    if has_sprint:
+        missing_board = [p.name for p in mgmt_projects if p.mgmt_summary.jira_board_id is None]
+        if missing_board:
+            raise ValueError(
+                "--sprint requires mgmt_summary.jira_board_id set on every enabled project. "
+                f"Missing on: {', '.join(missing_board)}"
+            )
+
     atlassian_auth = get_auth_header(config.atlassian)
     needs_token = config.m365.enabled or (config.smtp and config.smtp.use_oauth2)
     if needs_token:
@@ -253,93 +261,115 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         m365_token = None
 
     now_utc = datetime.now(timezone.utc)
-    sprint_id: Optional[int] = None
 
-    # --- Resolve time range ---
+    # --- Run-level label for subject/header (per-project sprint dates can differ,
+    # so this is a description of the run, not a single resolved date span) ---
     if has_sprint:
-        if mgmt_cfg.jira_board_id is None:
-            raise ValueError(
-                "--sprint requires jira_board_id to be set in the mgmt_summary config block"
-            )
-        print(f"Looking up sprint {args.sprint!r} on board {mgmt_cfg.jira_board_id}...")
-        sprint_id, since, until, sprint_label = fetch_sprint(
-            config.atlassian, atlassian_auth, mgmt_cfg.jira_board_id, args.sprint
-        )
-        label = sprint_label
-        print(f"  Sprint found: {sprint_label} ({since.date()} - {until.date()})")
+        run_label = args.sprint
     elif has_since:
-        since = parse_since(args.since)
-        until = now_utc
-        label = f"{since.strftime('%Y-%m-%d')} - {until.strftime('%Y-%m-%d')}"
+        run_label = f"{parse_since(args.since).strftime('%Y-%m-%d')} - {now_utc.strftime('%Y-%m-%d')}"
     else:
-        since = parse_since(args.from_date)
-        until = parse_since(args.to_date) if args.to_date else now_utc
-        label = f"{since.strftime('%Y-%m-%d')} - {until.strftime('%Y-%m-%d')}"
+        since_preview = parse_since(args.from_date)
+        until_preview = parse_since(args.to_date) if args.to_date else now_utc
+        run_label = f"{since_preview.strftime('%Y-%m-%d')} - {until_preview.strftime('%Y-%m-%d')}"
 
     _tz_label = now_utc.astimezone().strftime('%z')
     _tz_fmt = f"{_tz_label[:3]}:{_tz_label[3:]}" if len(_tz_label) == 5 else _tz_label
-    time_range = f"{label} ({_tz_fmt})"
-    subject = f"[Team Summary] {label}"
+    time_range = f"{run_label} ({_tz_fmt})"
+    subject = f"[Team Summary] {run_label}"
     if args.assume_done:
         subject += " (as-if done)"
 
-    print(f"Range:  {since.strftime('%Y-%m-%d')} -> {until.strftime('%Y-%m-%d')}")
+    print(f"Projects: {', '.join(p.name for p in mgmt_projects)}")
     if args.assume_done:
         print("  assume-done: in-progress tickets treated as completed")
     print()
 
-    # --- Fetch Jira team tickets ---
-    print("Fetching Jira team tickets...")
-    jira_items, team_account_ids = fetch_team_tickets(
-        config.atlassian, atlassian_auth, mgmt_cfg, since, until, sprint_id=sprint_id
-    )
-    done_n = sum(1 for i in jira_items if i.kind == "ticket_done")
-    wip_n  = sum(1 for i in jira_items if i.kind == "ticket_wip")
-    todo_n = sum(1 for i in jira_items if i.kind == "ticket_todo")
-    print(f"  {len(jira_items)} ticket(s)  ({done_n} done, {wip_n} in-progress, {todo_n} todo)")
-    print(f"  {len(team_account_ids)} unique team member(s)")
+    sections: List[MgmtSection] = []
 
-    # --- Fetch Confluence team pages ---
-    print("Fetching Confluence team pages...")
-    try:
-        confluence_items = fetch_team_pages(
-            config.atlassian, atlassian_auth, mgmt_cfg, since, until, team_account_ids
+    for project in mgmt_projects:
+        print(f"=== {project.name} ===")
+        pconf = config.atlassian.for_project(project)
+
+        # --- Resolve this project's own time range ---
+        if has_sprint:
+            print(f"  Looking up sprint {args.sprint!r} on board {project.mgmt_summary.jira_board_id}...")
+            sprint_id, since, until, sprint_label = fetch_sprint(
+                pconf, atlassian_auth, project.mgmt_summary.jira_board_id, args.sprint
+            )
+            label = f"{sprint_label} ({since.date()} - {until.date()})"
+            print(f"    Sprint found: {sprint_label} ({since.date()} - {until.date()})")
+        else:
+            sprint_id = None
+            if has_since:
+                since = parse_since(args.since)
+                until = now_utc
+            else:
+                since = parse_since(args.from_date)
+                until = parse_since(args.to_date) if args.to_date else now_utc
+            label = f"{since.strftime('%Y-%m-%d')} - {until.strftime('%Y-%m-%d')}"
+
+        # --- Fetch Jira team tickets ---
+        mgmt_cfg = resolve_project_mgmt_config(project, config.mgmt_summary)
+        jira_items, team_account_ids = fetch_team_tickets(
+            pconf, atlassian_auth, mgmt_cfg, since, until, sprint_id=sprint_id
         )
-        print(f"  {len(confluence_items)} page(s) with team changes")
-    except Exception as exc:
-        print(f"  WARNING: Confluence fetch failed ({exc.__class__.__name__}: {exc}); skipping.")
-        confluence_items = []
+        done_n = sum(1 for i in jira_items if i.kind == "ticket_done")
+        wip_n  = sum(1 for i in jira_items if i.kind == "ticket_wip")
+        todo_n = sum(1 for i in jira_items if i.kind == "ticket_todo")
+        print(f"  {len(jira_items)} ticket(s)  ({done_n} done, {wip_n} in-progress, {todo_n} todo)")
+        print(f"  {len(team_account_ids)} unique team member(s)")
 
-    # Reuse the personal digest's per-item LLM summarization so each page (including
-    # brand-new ones, diffed against an empty baseline) gets the same 1-2 sentence
-    # summary and cosmetic-only changes are skipped the same way.
-    if confluence_items:
-        confluence_items = summarize_items(confluence_items, config.llm, language=config.language)
-        print(f"  {len(confluence_items)} page(s) summarized")
-    print()
+        # --- Fetch Confluence team pages ---
+        try:
+            confluence_items = fetch_team_pages(
+                pconf, atlassian_auth, mgmt_cfg, since, until, team_account_ids
+            )
+            print(f"  {len(confluence_items)} page(s) with team changes")
+        except Exception as exc:
+            print(f"  WARNING: Confluence fetch failed ({exc.__class__.__name__}: {exc}); skipping.")
+            confluence_items = []
 
-    if not jira_items and not confluence_items:
+        # Reuse the personal digest's per-item LLM summarization so each page (including
+        # brand-new ones, diffed against an empty baseline) gets the same 1-2 sentence
+        # summary and cosmetic-only changes are skipped the same way.
+        if confluence_items:
+            confluence_items = summarize_items(confluence_items, config.llm, language=config.language)
+            print(f"  {len(confluence_items)} page(s) summarized")
+
+        if not jira_items and not confluence_items:
+            print(f"  Nothing found for {project.name} in this time range.")
+            print()
+            continue
+
+        print(f"  Synthesizing narrative for {project.name}...")
+        t_syn_start = time.monotonic()
+        narrative = synthesize_mgmt_summary(
+            jira_items,
+            confluence_items,
+            config.llm,
+            label=label,
+            assume_done=args.assume_done,
+            language=config.language,
+            short=args.short,
+        )
+        print(f"    Done ({time.monotonic() - t_syn_start:.1f}s)")
+        print()
+
+        sections.append(MgmtSection(
+            name=project.name,
+            label=label,
+            narrative=narrative,
+            jira_items=jira_items,
+            confluence_items=confluence_items,
+        ))
+
+    if not sections:
         print("Nothing found for the given time range.")
         return
 
-    # --- Synthesize narrative ---
-    print("Synthesizing management narrative...")
-    t_syn_start = time.monotonic()
-    narrative = synthesize_mgmt_summary(
-        jira_items,
-        confluence_items,
-        config.llm,
-        label=label,
-        assume_done=args.assume_done,
-        language=config.language,
-        short=args.short,
-    )
-    t_syn_end = time.monotonic()
-    print(f"  Done ({t_syn_end - t_syn_start:.1f}s)")
-    print()
-
-    # --- Deliver ---
-    recipient = mgmt_cfg.recipient or config.email.recipient
+    # --- Deliver: one email with one section per project that had content ---
+    recipient = config.mgmt_summary.recipient or config.email.recipient
     if not recipient:
         raise RuntimeError(
             "email.recipient (or mgmt_summary.recipient) must be set in config.yaml"
@@ -349,7 +379,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         if not args.dry_run:
             print(f"Sending via SMTP to {recipient}...")
         send_mgmt_summary_via_smtp(
-            narrative, jira_items, confluence_items,
+            sections,
             subject, config.email, config.smtp, recipient,
             dry_run=args.dry_run, time_range=time_range,
             m365_token=m365_token, command_line=command_line,
@@ -358,7 +388,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         if not args.dry_run:
             print(f"Sending via Outlook COM to {recipient}...")
         send_mgmt_summary_via_com(
-            narrative, jira_items, confluence_items,
+            sections,
             subject, config.email, recipient,
             dry_run=args.dry_run, time_range=time_range,
             command_line=command_line,

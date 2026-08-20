@@ -4,13 +4,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from digest.config import AtlassianConfig, MgmtSummaryConfig
+from digest.config import (
+    AtlassianConfig,
+    MgmtSummaryConfig,
+    ProjectConfig,
+    ProjectJiraConfig,
+    ProjectMgmtSummaryConfig,
+)
 from digest.sources.mgmt_jira import (
     _extract_text,
     _parse_dt,
     _parse_dt_optional,
     fetch_sprint,
     fetch_team_tickets,
+    resolve_project_mgmt_config,
 )
 
 
@@ -19,13 +26,11 @@ def make_atlassian_config() -> AtlassianConfig:
         url="https://example.atlassian.net",
         email="u@e.com",
         api_token="tok",
-        jira_projects=[],
-        confluence_spaces=[],
     )
 
 
 def make_mgmt_cfg(**kwargs) -> MgmtSummaryConfig:
-    defaults = dict(jira_jql="project = TEAM", jira_board_id=1)
+    defaults = dict(jira_jql="project = TEAM")
     defaults.update(kwargs)
     return MgmtSummaryConfig(**defaults)
 
@@ -282,6 +287,46 @@ def test_parse_dt_optional_empty_string_returns_now():
 def test_parse_dt_optional_with_value():
     result = _parse_dt_optional("2026-05-01T00:00:00Z")
     assert result.year == 2026 and result.month == 5
+
+
+# ---------------------------------------------------------------------------
+# resolve_project_mgmt_config
+# ---------------------------------------------------------------------------
+
+def _project(jira_project="TEAM", jql_extra=None, board_id=None):
+    return ProjectConfig(
+        name="Team Project",
+        jira=ProjectJiraConfig(project=jira_project),
+        mgmt_summary=ProjectMgmtSummaryConfig(jira_jql_extra=jql_extra, jira_board_id=board_id),
+    )
+
+
+def test_resolve_project_mgmt_config_project_key_only():
+    project = _project()
+    global_cfg = MgmtSummaryConfig()
+    resolved = resolve_project_mgmt_config(project, global_cfg)
+    assert resolved.jira_jql == "project = TEAM"
+
+
+def test_resolve_project_mgmt_config_combines_global_and_project_extra():
+    project = _project(jql_extra='"Team[Team]" = abc')
+    global_cfg = MgmtSummaryConfig(jira_jql="statusCategory != Done")
+    resolved = resolve_project_mgmt_config(project, global_cfg)
+    assert resolved.jira_jql == 'project = TEAM AND (statusCategory != Done) AND ("Team[Team]" = abc)'
+
+
+def test_resolve_project_mgmt_config_keeps_global_ignore_lists():
+    project = _project()
+    global_cfg = MgmtSummaryConfig(ignore_users=["Bot"], ignore_issue_types=["Test"])
+    resolved = resolve_project_mgmt_config(project, global_cfg)
+    assert resolved.ignore_users == ["Bot"]
+    assert resolved.ignore_issue_types == ["Test"]
+
+
+def test_resolve_project_mgmt_config_no_mgmt_summary_block_still_scopes_project():
+    project = ProjectConfig(name="P", jira=ProjectJiraConfig(project="TEAM"))
+    resolved = resolve_project_mgmt_config(project, MgmtSummaryConfig())
+    assert resolved.jira_jql == "project = TEAM"
 
 
 # ---------------------------------------------------------------------------

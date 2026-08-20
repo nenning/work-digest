@@ -2,18 +2,31 @@
 
 ## Data flow
 
-`main.py --mgmt-summary` → resolve time range (sprint/since/from-to) →
-`mgmt_jira.fetch_team_tickets()` → derive `team_account_ids` →
-`mgmt_confluence.fetch_team_pages()` (diffed page content, incl. brand-new
-pages) → `summarizer.summarize_items()` (same per-page 1-2 sentence LLM
-summary as the personal digest) → `summarizer.synthesize_mgmt_summary()`
-(single LLM call, free-text narrative) → `email_sender.send_mgmt_summary()`.
-State is never updated.
+`main.py --mgmt-summary` selects `mgmt_projects` = every `atlassian.projects`
+entry with a `mgmt_summary` block (errors out if none). For `--sprint`, every
+enabled project must have `mgmt_summary.jira_board_id` set, or the run errors
+listing which project(s) are missing it.
 
-`--mgmt-summary` fetches all team tickets via a configurable
-`mgmt_summary.jira_jql`, derives team members from assignee/reporter
-accountIds (skipping ignored users on either field), fetches Confluence
-pages contributed to by those accountIds, then:
+Then, **per project**: resolve that project's own time range (sprint lookup
+via its own `jira_board_id`, so different projects can resolve different
+date ranges for the same sprint name, or a shared since/from-to range) →
+`mgmt_jira.fetch_team_tickets()` with JQL composed as `project = X AND
+(global mgmt_summary.jira_jql) AND (project's mgmt_summary.jira_jql_extra)`
+(`mgmt_jira.resolve_project_mgmt_config()`) → derive `team_account_ids` →
+`mgmt_confluence.fetch_team_pages()` scoped to that project's Confluence
+spaces (diffed page content, incl. brand-new pages) →
+`summarizer.summarize_items()` (same per-page 1-2 sentence LLM summary as
+the personal digest) → `summarizer.synthesize_mgmt_summary()` (single LLM
+call, free-text narrative) → one `MgmtSection` per project. Projects with no
+Jira tickets and no Confluence pages in their time range are skipped
+entirely (no section, no LLM call).
+
+All resulting sections are sent as **one** email via
+`email_sender.send_mgmt_summary()`, to the single global
+`mgmt_summary.recipient` (or `email.recipient`) — there is no per-project
+recipient. State is never updated.
+
+Per project:
 
 - A page's `author` field is a comma-joined list when multiple team members
   edited it.
@@ -22,25 +35,32 @@ pages contributed to by those accountIds, then:
   handling, including the cosmetic-only skip).
 - Jira tickets are **not** individually summarized.
 - A final single free-text LLM call (`synthesize_mgmt_summary()`) produces a
-  2–3 paragraph narrative from the ticket lists and the per-page summaries.
+  2–3 paragraph narrative from that project's ticket lists and per-page
+  summaries.
 - The `--assume-done` flag instructs the LLM to present in-progress and todo
   tickets as completed.
 
 ## `digest/sources/mgmt_jira.py`
 
+`resolve_project_mgmt_config()` builds the per-project effective
+`MgmtSummaryConfig`: `project = X` plus the global `mgmt_summary.jira_jql`
+plus the project's own `mgmt_summary.jira_jql_extra`, each AND'd in as a
+parenthesized clause when present. `ignore_users`/`ignore_issue_types` stay
+the shared global values — there's no per-project override for those.
+
 Paginated team ticket fetch (`nextPageToken`); sprint lookup via `GET
 /rest/agile/1.0/board/{id}/sprint` (paginates with case-insensitive name
-match — requires `mgmt_summary.jira_board_id` in config); kinds:
+match — requires that project's own `mgmt_summary.jira_board_id`); kinds:
 `ticket_done`/`wip`/`todo`. `ignore_users` is checked against both assignee
 and reporter so an ignored account never enters `team_account_ids`.
 
 ## `digest/sources/mgmt_confluence.py`
 
 Pages filtered by team accountIds (CQL `contributor in (...)`, scoped to
-`confluence_spaces` — unscoped, this CQL clause scans the whole instance and
-is slow enough to look like a hang on a wide `--since` range), paginated via
-`_links.next` (same cursor scheme as `confluence.py`) with a 200-page safety
-cap.
+that project's `confluence.spaces` — unscoped, this CQL clause scans the
+whole instance and is slow enough to look like a hang on a wide `--since`
+range), paginated via `_links.next` (same cursor scheme as `confluence.py`)
+with a 200-page safety cap.
 
 The CQL has no upper `lastModified` bound — that field reflects the page's
 *live* latest version, so a page edited again after `until` (by anyone, team

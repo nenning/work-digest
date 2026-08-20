@@ -37,8 +37,7 @@ pip install -r requirements.txt
 | `atlassian.url` | Yes | `https://yourcompany.atlassian.net` | Your Jira/Confluence instance URL |
 | `atlassian.email` | Yes | `you@company.com` | Your Atlassian account email |
 | `atlassian.api_token` | Yes | (see [API Token](#atlassian-api-token)) | API token for authentication |
-| `atlassian.jira_projects` | Yes | `[PROJ, OTHER]` | List of Jira project keys to fetch |
-| `atlassian.confluence_spaces` | Yes | `[ENG, DOC]` | List of Confluence space keys to fetch |
+| `atlassian.projects` | Yes | see below | List of projects to fetch; each has `name`, `jira.project`, and optional `confluence.spaces` |
 | `m365.enabled` | No | `true` | Set `false` to skip Teams/Outlook and open a local Outlook draft instead of sending via Graph API |
 | `m365.tenant_id` | No | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` | Azure AD tenant ID; omit to use default. Only used when `m365.enabled: true` |
 | `m365.client_id` | No | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` | Custom Azure AD app ID; required if your tenant blocks the Azure CLI public client (AADSTS65002) |
@@ -51,6 +50,26 @@ pip install -r requirements.txt
 | `schedule.times` | Yes | `["08:00", "13:00", "17:00"]` | List of times (24-hour HH:MM) to run digest |
 | `email.subject_prefix` | No | `[Digest]` | Prefix for digest email subject (default: `[Digest]`) |
 | `data_dir` | No | `~/.digest` | Where to store state and token cache (default: `~/.digest`) |
+
+### `atlassian.projects`
+
+Each entry:
+
+```yaml
+projects:
+  - name: PROJ                  # display label — mgmt-summary section headings, console output
+    jira:
+      project: PROJ              # Jira project key
+      # jql_extra: '...'        # optional, AND'd onto this project's own personal-digest queries
+    confluence:
+      spaces: [ENG]              # optional
+    # mgmt_summary:              # optional — omit to exclude this project from --mgmt-summary
+    #   jira_jql_extra: '...'
+    #   jira_board_id: 123      # required only if you use --sprint for this project
+    # url: https://other-tenant.atlassian.net   # optional, rare — see below
+```
+
+The personal digest fetches each project with its own JQL/spaces. `url` overrides `atlassian.url` for just that project's requests — credentials (`email`/`api_token`/`auth_type`/`cloud_id`) stay global, so this only works cleanly with `auth_type: classic` (classic tokens are account-level, not site-level).
 
 ## Atlassian API Token
 
@@ -258,23 +277,38 @@ Combine with `--dry-run` to see detailed output without sending email.
 
 ## Management Summary Mode
 
-The `--mgmt-summary` flag switches to a team-wide view: it fetches all Jira tickets matching your configured team JQL and all Confluence pages updated by team members, then produces a single cohesive narrative suitable for a management audience.
+The `--mgmt-summary` flag switches to a team-wide view: for every `atlassian.projects` entry that has a `mgmt_summary` block, it fetches that project's Jira tickets and the Confluence pages updated by its team members, then sends a single email with one narrative section per project.
 
 ### Configuration
 
-Add the `mgmt_summary` block to `config.yaml`:
+Add a `mgmt_summary` block to each project you want included, plus the shared `mgmt_summary` top-level block:
 
 ```yaml
+atlassian:
+  projects:
+    - name: PROJ
+      jira:
+        project: PROJ
+      mgmt_summary:
+        jira_jql_extra: '...'               # optional, AND'd onto "project = PROJ" + the global jira_jql below
+        jira_board_id: 123                  # required for --sprint on this project; find it in the board URL
+    - name: OTHER
+      jira:
+        project: OTHER
+      # no mgmt_summary block -> OTHER excluded from --mgmt-summary
+
 mgmt_summary:
-  jira_jql: "project = PP"              # required — JQL defining your team's tickets
-  jira_board_id: 123                    # required for --sprint; find it in your board URL
-  ignore_users: ["xray-bot"]            # display names to exclude — applies to Jira tickets
+  jira_jql: "statusCategory != Done"    # optional shared/base clause AND'd onto every project's own filter
+  ignore_users: ["xray-bot"]            # display names to exclude — global, applies to Jira tickets
                                          # (assignee and reporter) and to Confluence page edits
-  ignore_issue_types:                   # issue types to skip entirely
+  ignore_issue_types:                   # issue types to skip entirely — global
     - "Xray Test"
     - "Test Plan"
-  recipient: "manager@company.com"      # optional — who to send to (defaults to your own address)
+  recipient: "manager@company.com"      # optional — who to send to (defaults to email.recipient).
+                                         # Single global recipient — no per-project override.
 ```
+
+At least one project needs a `mgmt_summary` block, or `--mgmt-summary` errors out. With `--sprint`, every enabled project needs `jira_board_id` set — the error lists which project(s) are missing it.
 
 ### Usage
 
@@ -302,12 +336,16 @@ python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29
 
 ### What it does
 
-1. Fetches all Jira tickets matching `mgmt_summary.jira_jql` for the given time range or sprint, filtering out ignored users (checked on both assignee and reporter) and ignored issue types
-2. Collects team members from the remaining tickets' assignees/reporters
-3. Fetches Confluence pages those team members edited in the same window, scoped to `atlassian.confluence_spaces`; edits by an ignored user are excluded here too
-4. For each page, diffs the version confirmed within the window against its pre-window baseline (or against nothing for a brand-new page) — never against whatever is live on the page after the window ends — and credits every team member who edited it in-window, not just one
-5. Makes a single LLM call to produce a 2–3 paragraph management narrative
-6. Sends an HTML email with the narrative and a supporting ticket table
+For each project with a `mgmt_summary` block:
+
+1. Resolves the project's own time range — for `--sprint`, looks up the sprint by name on that project's own `jira_board_id`, so different projects can resolve different date ranges for the same sprint name
+2. Fetches that project's Jira tickets via `project = X AND (global mgmt_summary.jira_jql) AND (project's mgmt_summary.jira_jql_extra)`, filtering out ignored users (checked on both assignee and reporter) and ignored issue types
+3. Collects team members from the remaining tickets' assignees/reporters
+4. Fetches Confluence pages those team members edited in the same window, scoped to the project's `confluence.spaces`; edits by an ignored user are excluded here too
+5. For each page, diffs the version confirmed within the window against its pre-window baseline (or against nothing for a brand-new page) — never against whatever is live on the page after the window ends — and credits every team member who edited it in-window, not just one
+6. Makes a single LLM call to produce a 2–3 paragraph management narrative for that project
+
+Projects with no data in the time range are skipped. All resulting sections are sent as **one** email to the single global `mgmt_summary.recipient` (or `email.recipient`).
 
 Management summary runs never update `state.json`.
 
@@ -320,14 +358,16 @@ Each run fetches activity since the last successful run (or 24 hours ago on firs
 | Source | What is fetched | API used |
 |--------|----------------|----------|
 | **Jira** | All tickets you are watching (updated since last run): @mentions in comments or descriptions, new comments, field changes (status, assignee, …) | Jira REST API v3, JQL `watcher = currentUser()` + per-issue changelog |
-| **Jira** | Newly created tickets in your configured projects | JQL `created >= since` |
+| **Jira** | Newly created tickets in each configured project | JQL `created >= since` |
 | **Confluence** | Pages where you are `@mentioned` (created since last run) | Confluence CQL, `/wiki/rest/api/content/search` |
-| **Confluence** | Pages modified in your configured spaces | CQL `lastModified >= since` |
+| **Confluence** | Pages modified in each project's configured spaces | CQL `lastModified >= since` |
 | **Teams** | Messages in every channel of every team you belong to | Graph API `/me/joinedTeams` → channels → messages |
 | **Teams** | Direct messages and group chats | Graph API `/me/chats` → messages |
 | **Outlook** | All emails received in your inbox | Graph API `/me/mailFolders/inbox/messages` |
 
 Pagination is handled automatically for all sources. System messages and bot events (Teams) are filtered out.
+
+Jira runs one query per `atlassian.projects` entry, each with its own `jql_extra`. Confluence mentions run once per distinct effective URL (grouping projects that share the same `atlassian.url`, since mention search isn't space-scoped); page-update search runs once per URL group using the union of that group's spaces. With no project overriding `url` (the common case), this is unchanged from a single combined query.
 
 ### Processing pipeline
 

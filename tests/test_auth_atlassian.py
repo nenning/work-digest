@@ -9,8 +9,6 @@ def make_config(**overrides):
         url="https://example.atlassian.net",
         email="user@example.com",
         api_token="secret123",
-        jira_projects=[],
-        confluence_spaces=[],
     )
     defaults.update(overrides)
     return AtlassianConfig(**defaults)

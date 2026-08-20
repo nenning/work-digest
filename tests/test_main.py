@@ -9,7 +9,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from digest.main import parse_since
-from digest.config import SmtpConfig
+from digest.config import (
+    AtlassianConfig,
+    Config,
+    EmailConfig,
+    LLMConfig,
+    M365Config,
+    MgmtSummaryConfig,
+    ProjectConfig,
+    ProjectJiraConfig,
+    ProjectMgmtSummaryConfig,
+    ScheduleConfig,
+    SmtpConfig,
+)
+from digest.models import SourceItem
 
 
 # ---------------------------------------------------------------------------
@@ -42,8 +55,7 @@ def _make_config(tmp_path: Path, smtp: bool = False):
     cfg.atlassian.url = "https://example.atlassian.net"
     cfg.atlassian.email = "user@example.com"
     cfg.atlassian.api_token = "token"
-    cfg.atlassian.jira_projects = []
-    cfg.atlassian.confluence_spaces = []
+    cfg.atlassian.projects = []
     cfg.llm.provider = "openai"
     cfg.llm.api_key = "key"
     cfg.llm.model = "gpt-4o-mini"
@@ -52,6 +64,136 @@ def _make_config(tmp_path: Path, smtp: bool = False):
     cfg.email.recipient = "user@example.com"
     cfg.smtp = SmtpConfig(host="smtp.example.com", username="user@example.com") if smtp else None
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# _run_mgmt_summary integration tests
+# ---------------------------------------------------------------------------
+
+def _make_mgmt_config(tmp_path: Path, projects, mgmt_summary=None) -> Config:
+    """Real (non-mock) Config -- _run_mgmt_summary exercises real dataclass code
+    (AtlassianConfig.for_project, resolve_project_mgmt_config's dataclasses.replace),
+    which a MagicMock can't stand in for."""
+    return Config(
+        atlassian=AtlassianConfig(
+            url="https://example.atlassian.net",
+            email="user@example.com",
+            api_token="token",
+            projects=projects,
+        ),
+        m365=M365Config(enabled=False),
+        llm=LLMConfig(provider="openai", api_key="key", models=["gpt-4o-mini"]),
+        schedule=ScheduleConfig(times=["08:00"]),
+        email=EmailConfig(recipient="user@example.com"),
+        data_dir=tmp_path,
+        mgmt_summary=mgmt_summary or MgmtSummaryConfig(),
+        smtp=SmtpConfig(host="smtp.example.com", username="user@example.com"),
+    )
+
+
+def _make_ticket(key="PROJ-1") -> SourceItem:
+    return SourceItem(
+        source="jira", kind="ticket_done", title=key, url=f"https://example.atlassian.net/browse/{key}",
+        content="done", author="Alice", timestamp=datetime.now(timezone.utc),
+    )
+
+
+def test_mgmt_summary_no_project_configured_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    project = ProjectConfig(name="P1", jira=ProjectJiraConfig(project="PROJ"))  # no mgmt_summary block
+    config = _make_mgmt_config(tmp_path, [project])
+
+    with patch("digest.main.load_config", return_value=config):
+        from digest.main import main
+        with pytest.raises(RuntimeError, match="mgmt_summary block"):
+            main()
+
+
+def test_mgmt_summary_sprint_missing_board_id_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--sprint", "Sprint 1"])
+    project = ProjectConfig(
+        name="P1", jira=ProjectJiraConfig(project="PROJ"),
+        mgmt_summary=ProjectMgmtSummaryConfig(),  # no jira_board_id
+    )
+    config = _make_mgmt_config(tmp_path, [project])
+
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+    ):
+        from digest.main import main
+        with pytest.raises(ValueError, match="jira_board_id"):
+            main()
+
+
+def test_mgmt_summary_single_project_sends_one_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    project = ProjectConfig(
+        name="Project One", jira=ProjectJiraConfig(project="PROJ"),
+        mgmt_summary=ProjectMgmtSummaryConfig(),
+    )
+    config = _make_mgmt_config(tmp_path, [project])
+
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=([_make_ticket()], {"a1"})),
+        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.main.synthesize_mgmt_summary", return_value="Great progress."),
+        patch("digest.main.send_mgmt_summary_via_smtp") as mock_send,
+    ):
+        from digest.main import main
+        main()
+
+    assert mock_send.call_count == 1
+    sections = mock_send.call_args.args[0]
+    assert len(sections) == 1
+    assert sections[0].name == "Project One"
+    assert sections[0].narrative == "Great progress."
+
+
+def test_mgmt_summary_multiple_projects_each_own_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    p1 = ProjectConfig(name="Project One", jira=ProjectJiraConfig(project="ONE"),
+                        mgmt_summary=ProjectMgmtSummaryConfig())
+    p2 = ProjectConfig(name="Project Two", jira=ProjectJiraConfig(project="TWO"),
+                        mgmt_summary=ProjectMgmtSummaryConfig())
+    config = _make_mgmt_config(tmp_path, [p1, p2])
+
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=([_make_ticket()], {"a1"})),
+        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.main.synthesize_mgmt_summary", return_value="Progress."),
+        patch("digest.main.send_mgmt_summary_via_smtp") as mock_send,
+    ):
+        from digest.main import main
+        main()
+
+    sections = mock_send.call_args.args[0]
+    assert [s.name for s in sections] == ["Project One", "Project Two"]
+
+
+def test_mgmt_summary_project_with_no_data_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    project = ProjectConfig(
+        name="Empty", jira=ProjectJiraConfig(project="EMPTY"),
+        mgmt_summary=ProjectMgmtSummaryConfig(),
+    )
+    config = _make_mgmt_config(tmp_path, [project])
+
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=([], set())),
+        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.main.send_mgmt_summary_via_smtp") as mock_send,
+    ):
+        from digest.main import main
+        main()
+
+    mock_send.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

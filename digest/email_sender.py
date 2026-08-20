@@ -15,7 +15,7 @@ import keyring
 from jinja2 import Environment, FileSystemLoader
 
 from digest.config import EmailConfig, SmtpConfig
-from digest.models import SourceItem, SummarizedItem
+from digest.models import MgmtSection, SourceItem, SummarizedItem
 
 log = logging.getLogger(__name__)
 
@@ -269,9 +269,7 @@ def send_via_smtp(
 
 
 def send_mgmt_summary_via_smtp(
-    narrative: str,
-    jira_items: List[SourceItem],
-    confluence_items: List[SummarizedItem],
+    sections: List[MgmtSection],
     subject: str,
     config: EmailConfig,
     smtp_cfg: SmtpConfig,
@@ -282,13 +280,15 @@ def send_mgmt_summary_via_smtp(
     m365_token: Optional[str] = None,
     command_line: Optional[str] = None,
 ) -> bool:
-    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices, command_line)
+    html_body = _render_mgmt_html(sections, subject, time_range, notices, command_line)
 
     if dry_run:
         preview_to = smtp_cfg.sender or smtp_cfg.username
         print(f"\nDRY RUN — sending preview to {preview_to}\n{'─' * 60}")
-        print(narrative)
-        print(f"\n[{len(jira_items)} Jira tickets, {len(confluence_items)} Confluence pages]")
+        for section in sections:
+            print(f"\n=== {section.name} ({section.label}) ===")
+            print(section.narrative)
+            print(f"\n[{len(section.jira_items)} Jira tickets, {len(section.confluence_items)} Confluence pages]")
         return _smtp_send(smtp_cfg, preview_to, subject, html_body, m365_token)
 
     return _smtp_send(smtp_cfg, recipient, subject, html_body, m365_token)
@@ -358,10 +358,30 @@ def send_via_com(
     return True
 
 
+def _render_mgmt_section(section: MgmtSection) -> dict:
+    lines = [ln.strip() for ln in section.narrative.strip().splitlines() if ln.strip()]
+    bullet_items = [ln[2:] for ln in lines if ln.startswith("- ")]
+    if bullet_items:
+        paragraphs = []
+    else:
+        paragraphs = [p.strip() for p in section.narrative.split("\n\n") if p.strip()]
+        if not paragraphs:
+            paragraphs = [section.narrative.strip()]
+
+    return {
+        "name": section.name,
+        "label": section.label,
+        "narrative_paragraphs": paragraphs,
+        "bullet_items": bullet_items,
+        "done_tickets": [i for i in section.jira_items if i.kind == "ticket_done"],
+        "wip_tickets": [i for i in section.jira_items if i.kind == "ticket_wip"],
+        "todo_tickets": [i for i in section.jira_items if i.kind == "ticket_todo"],
+        "confluence_items": section.confluence_items,
+    }
+
+
 def _render_mgmt_html(
-    narrative: str,
-    jira_items: List[SourceItem],
-    confluence_items: List[SummarizedItem],
+    sections: List[MgmtSection],
     subject: str,
     time_range: Optional[str] = None,
     notices: Optional[List[str]] = None,
@@ -371,37 +391,17 @@ def _render_mgmt_html(
     env.filters["safe_url"] = _safe_url
     template = env.get_template("mgmt_summary.html.j2")
 
-    lines = [ln.strip() for ln in narrative.strip().splitlines() if ln.strip()]
-    bullet_items = [ln[2:] for ln in lines if ln.startswith("- ")]
-    if bullet_items:
-        paragraphs = []
-    else:
-        paragraphs = [p.strip() for p in narrative.split("\n\n") if p.strip()]
-        if not paragraphs:
-            paragraphs = [narrative.strip()]
-
-    done_tickets = [i for i in jira_items if i.kind == "ticket_done"]
-    wip_tickets  = [i for i in jira_items if i.kind == "ticket_wip"]
-    todo_tickets = [i for i in jira_items if i.kind == "ticket_todo"]
-
     return template.render(
         subject=subject,
         time_range=time_range,
         notices=notices or [],
-        narrative_paragraphs=paragraphs,
-        bullet_items=bullet_items,
-        done_tickets=done_tickets,
-        wip_tickets=wip_tickets,
-        todo_tickets=todo_tickets,
-        confluence_items=confluence_items,
+        sections=[_render_mgmt_section(s) for s in sections],
         command_line=command_line,
     )
 
 
 def send_mgmt_summary_via_com(
-    narrative: str,
-    jira_items: List[SourceItem],
-    confluence_items: List[SummarizedItem],
+    sections: List[MgmtSection],
     subject: str,
     config: EmailConfig,
     recipient: str,
@@ -410,7 +410,7 @@ def send_mgmt_summary_via_com(
     notices: Optional[List[str]] = None,
     command_line: Optional[str] = None,
 ) -> bool:
-    html_body = _render_mgmt_html(narrative, jira_items, confluence_items, subject, time_range, notices, command_line)
+    html_body = _render_mgmt_html(sections, subject, time_range, notices, command_line)
 
     try:
         import win32com.client
