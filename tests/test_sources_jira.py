@@ -465,17 +465,19 @@ def test_jql_extra_appended():
     assert all('"Team[Team]" = abc' in jql for jql in calls)
 
 
-def test_jql_uses_watcher_query():
+def test_ticket_update_query_is_not_watcher_scoped():
     mock_get, mock_post = _mock_responses([])
     with patch("digest.sources.jira.requests.get", mock_get), \
          patch("digest.sources.jira.requests.post", mock_post):
         fetch(make_config(), "Basic xxx", SINCE)
-    watched_calls = [
+    update_calls = [
         call.kwargs["json"]["jql"]
         for call in mock_post.call_args_list
-        if "watcher" in call.kwargs["json"]["jql"]
+        if "created >=" not in call.kwargs["json"]["jql"]
     ]
-    assert len(watched_calls) >= 1
+    assert update_calls  # the ticket-update query ran
+    assert all("watcher" not in jql for jql in update_calls)
+    assert all('project = PROJ AND updated >=' in jql for jql in update_calls)
 
 
 def test_changelog_fetched_per_issue():

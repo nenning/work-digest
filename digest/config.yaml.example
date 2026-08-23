@@ -8,7 +8,7 @@ atlassian:
       jira:
         project: PROJ                       # Jira project key
         # jql_extra: '"Team[Team]" = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-        # optional — AND'd onto this project's personal-digest queries (watched tickets + new tickets)
+        # optional — AND'd onto this project's personal-digest queries (ticket updates + new tickets)
       confluence:
         spaces: [ENG]                       # optional
       # mgmt_summary:                       # optional — omit to exclude this project from --mgmt-summary

@@ -38,8 +38,9 @@ digest/auth/
                         vs. scoped API tokens. Details: docs/architecture/atlassian-auth.md
   microsoft.py          MSAL device code flow; token cache at ~/.digest/token_cache.bin
 digest/sources/
-  jira.py               Watched tickets; changelog-based mention/comment/field-change
-                        detection. Details: docs/architecture/jira.md
+  jira.py               All tickets matching project + jql_extra (same scope as new-ticket
+                        detection); changelog-based mention/comment/field-change detection,
+                        fetched concurrently per issue. Details: docs/architecture/jira.md
   confluence.py         Mentions + page updates (CQL), deduplicated per page.
                         Details: docs/architecture/confluence.md
   teams.py              Channel messages + DMs via Graph API

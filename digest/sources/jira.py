@@ -1,3 +1,5 @@
+import concurrent.futures
+import logging
 import re
 import requests
 from datetime import datetime, timezone
@@ -6,6 +8,8 @@ from typing import List
 from markupsafe import Markup
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
+
+log = logging.getLogger(__name__)
 
 
 def _load_field_ignore() -> set:
@@ -97,7 +101,7 @@ def _linkify_remote_link(value: str, remote_links: list[dict]):
 def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[SourceItem]:
     since_str = since.astimezone().strftime("%Y-%m-%d %H:%M")
     items: List[SourceItem] = []
-    items.extend(_fetch_watched(config, auth_header, since, since_str))
+    items.extend(_fetch_ticket_updates(config, auth_header, since, since_str))
     items.extend(_fetch_new_tickets(config, auth_header, since_str))
     new_ticket_keys = {i.title.split(":")[0] for i in items if i.kind == "new_ticket"}
     return [i for i in items if not (i.kind != "new_ticket" and i.title.split(":")[0] in new_ticket_keys)]
@@ -179,12 +183,15 @@ def _fetch_issue_changelog(config: AtlassianConfig, auth_header: str, issue_key:
     return resp.json().get("values", [])
 
 
-def _fetch_watched(
+def _fetch_ticket_updates(
     config: AtlassianConfig,
     auth_header: str,
     since: datetime,
     since_str: str,
 ) -> List[SourceItem]:
+    """Fetch comments/mentions/field-changes for every ticket matching project + jql_extra
+    (same scope as _fetch_new_tickets), not just tickets the current user watches.
+    """
     since_utc = since.astimezone(timezone.utc)
     items: List[SourceItem] = []
     summary_cache: dict = {}
@@ -197,12 +204,14 @@ def _fetch_watched(
         issues = _jql_search(
             pconf, auth_header,
             _append_extra(
-                f'project = {project.jira.project} AND watcher = currentUser() AND updated >= "{since_str}"',
+                f'project = {project.jira.project} AND updated >= "{since_str}"',
                 project.jira.jql_extra,
             ),
         )
+        if not issues:
+            continue
 
-        for issue in issues:
+        def _fetch_one(issue: dict) -> List[SourceItem]:
             key = issue["key"]
             title = f"{key}: {issue['fields']['summary']}"
             url = f"{pconf.url}/browse/{key}"
@@ -211,7 +220,15 @@ def _fetch_watched(
             deduped = _deduplicate(candidates)
             for it in deduped:
                 it.project = project.name
-            items.extend(deduped)
+            return deduped
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(issues), 8)) as executor:
+            futures = [executor.submit(_fetch_one, issue) for issue in issues]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    items.extend(future.result())
+                except Exception as exc:
+                    log.warning("Failed to fetch Jira issue update: %s", exc)
 
     return items
 
