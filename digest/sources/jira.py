@@ -208,7 +208,10 @@ def _fetch_watched(
             url = f"{pconf.url}/browse/{key}"
             issue["changelog"] = {"histories": _fetch_issue_changelog(pconf, auth_header, key)}
             candidates = _collect_candidates(issue, since_utc, account_id, title, url, pconf, auth_header, summary_cache)
-            items.extend(_deduplicate(candidates))
+            deduped = _deduplicate(candidates)
+            for it in deduped:
+                it.project = project.name
+            items.extend(deduped)
 
     return items
 
@@ -477,6 +480,7 @@ def _fetch_new_tickets(config, auth_header, since_str) -> List[SourceItem]:
                 content=f"Reporter: {_display_name(i['fields'].get('reporter'))}. Assignee: {_display_name(i['fields'].get('assignee'))}.",
                 author=_display_name(i["fields"].get("reporter")),
                 timestamp=_parse_dt(i["fields"]["created"]),
+                project=project.name,
                 metadata={
                     "assignee": _display_name(i["fields"].get("assignee")),
                     "description": _extract_text(i["fields"].get("description") or ""),

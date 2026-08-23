@@ -70,6 +70,39 @@ def _kind_to_group(source: str, kind: str) -> str:
     if kind in _NEW_KINDS:
         return "new"
     return "updates"
+
+
+def _build_sections(
+    items: List[SummarizedItem],
+    project_order: Optional[List[str]] = None,
+) -> tuple:
+    """Group items by (project, kind-group).
+
+    Items without a project (Teams/Outlook, and any Confluence mention on a space
+    outside every configured project) land in a shared `general` bucket rather than
+    a synthetic project block. Project blocks are ordered per `project_order` (the
+    order projects are declared in config) when given, else by first appearance.
+    """
+    by_project: Dict[str, Dict[str, List[SummarizedItem]]] = {}
+    general: Dict[str, List[SummarizedItem]] = {}
+
+    for item in items:
+        group = _kind_to_group(item.source, item.kind)
+        if item.project:
+            by_project.setdefault(item.project, {}).setdefault(group, []).append(item)
+        else:
+            general.setdefault(group, []).append(item)
+
+    if project_order:
+        ordered_names = [name for name in project_order if name in by_project]
+        ordered_names += [name for name in by_project if name not in ordered_names]
+    else:
+        ordered_names = list(by_project.keys())
+
+    projects = [{"name": name, "groups": by_project[name]} for name in ordered_names]
+    return projects, general
+
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 _ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -145,7 +178,8 @@ def _build_subject(prefix: str, now: datetime, n_items: int, n_sources: int) -> 
 
 
 def _render_html(
-    sections: Dict[str, List[SummarizedItem]],
+    projects: List[dict],
+    general: Dict[str, List[SummarizedItem]],
     subject: str,
     notices: Optional[List[str]] = None,
     time_range: Optional[str] = None,
@@ -160,7 +194,8 @@ def _render_html(
     template = env.get_template("digest.html.j2")
     return template.render(
         subject=subject,
-        sections=sections,
+        projects=projects,
+        general=general,
         group_order=GROUP_ORDER,
         group_icons=GROUP_ICONS,
         group_labels=GROUP_LABELS,
@@ -235,6 +270,7 @@ def send_via_smtp(
     timing: Optional[dict] = None,
     m365_token: Optional[str] = None,
     command_line: Optional[str] = None,
+    project_order: Optional[List[str]] = None,
 ) -> bool:
     """Render and send the digest email via SMTP.
 
@@ -244,21 +280,17 @@ def send_via_smtp(
     if not items:
         return False
 
-    sections: Dict[str, List[SummarizedItem]] = {}
-    for item in items:
-        if item.source not in VALID_SOURCES:
-            continue
-        group = _kind_to_group(item.source, item.kind)
-        sections.setdefault(group, []).append(item)
-
-    if not sections:
+    valid_items = [i for i in items if i.source in VALID_SOURCES]
+    if not valid_items:
         return False
 
-    n_items = sum(len(v) for v in sections.values())
-    n_sources = len({it.source for grp in sections.values() for it in grp})
+    projects, general = _build_sections(valid_items, project_order)
+
+    n_items = len(valid_items)
+    n_sources = len({it.source for it in valid_items})
     _now = now if now is not None else datetime.now().astimezone()
     subject = _build_subject(config.subject_prefix, _now, n_items, n_sources)
-    html_body = _render_html(sections, subject, notices, time_range, timing, command_line)
+    html_body = _render_html(projects, general, subject, notices, time_range, timing, command_line)
 
     if dry_run:
         preview_to = smtp_cfg.sender or smtp_cfg.username
@@ -304,6 +336,7 @@ def send_via_com(
     time_range: Optional[str] = None,
     timing: Optional[dict] = None,
     command_line: Optional[str] = None,
+    project_order: Optional[List[str]] = None,
 ) -> bool:
     """Render the digest and send (or preview as draft) via Outlook Classic COM.
 
@@ -316,21 +349,17 @@ def send_via_com(
     if not items:
         return False
 
-    sections: Dict[str, List[SummarizedItem]] = {}
-    for item in items:
-        if item.source not in VALID_SOURCES:
-            continue
-        group = _kind_to_group(item.source, item.kind)
-        sections.setdefault(group, []).append(item)
-
-    if not sections:
+    valid_items = [i for i in items if i.source in VALID_SOURCES]
+    if not valid_items:
         return False
 
-    n_items = sum(len(v) for v in sections.values())
-    n_sources = len({it.source for grp in sections.values() for it in grp})
+    projects, general = _build_sections(valid_items, project_order)
+
+    n_items = len(valid_items)
+    n_sources = len({it.source for it in valid_items})
     _now = now if now is not None else datetime.now().astimezone()
     subject = _build_subject(config.subject_prefix, _now, n_items, n_sources)
-    html_body = _render_html(sections, subject, notices, time_range, timing, command_line)
+    html_body = _render_html(projects, general, subject, notices, time_range, timing, command_line)
 
     try:
         import win32com.client  # pywin32 — Windows only

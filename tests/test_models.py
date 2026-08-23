@@ -20,6 +20,22 @@ def test_summarized_item():
     assert item.priority == "action_needed"
 
 
+def test_source_item_project_defaults_to_none():
+    item = SourceItem(
+        source="jira", kind="comment", title="T", url="http://x",
+        content="c", author="a", timestamp=datetime.now(timezone.utc)
+    )
+    assert item.project is None
+
+
+def test_summarized_item_project_defaults_to_none():
+    item = SummarizedItem(
+        source="jira", kind="comment", title="T", url="http://x",
+        summary="s", author="a", timestamp=datetime.now(timezone.utc)
+    )
+    assert item.project is None
+
+
 def test_metadata_not_shared_between_instances():
     ts = datetime.now(timezone.utc)
     a = SourceItem(source="jira", kind="comment", title="T", url="u", content="c", author="a", timestamp=ts)

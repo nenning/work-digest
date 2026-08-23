@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, List, Literal
+from typing import Any, List, Literal, Optional
 
 Priority = Literal["action_needed", "meeting_invite", "fyi", "info"]
 
@@ -15,6 +15,7 @@ class SourceItem:
     author: str
     timestamp: datetime
     priority: Priority = "info"
+    project: Optional[str] = None  # owning project's display name; None = not attributable to one
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -32,6 +33,7 @@ class SummarizedItem:
     author: str
     timestamp: datetime
     priority: Priority = "info"
+    project: Optional[str] = None  # owning project's display name; None = not attributable to one
 
     def __post_init__(self) -> None:
         if self.timestamp.tzinfo is None:

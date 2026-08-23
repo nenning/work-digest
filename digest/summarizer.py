@@ -354,6 +354,7 @@ def _format_field_change(item: SourceItem) -> SummarizedItem:
         author=item.author,
         timestamp=item.timestamp,
         priority=item.priority,
+        project=item.project,
     )
 
 
@@ -370,6 +371,7 @@ def _format_new_ticket(item: SourceItem, description_summary: str | None = None,
         author=item.author,
         timestamp=item.timestamp,
         priority=item.priority,
+        project=item.project,
     )
 
 
@@ -440,6 +442,7 @@ def _summarize_one_item(
             source=item.source, kind=item.kind, title=item.title, url=item.url,
             summary=f"[LLM error — {detail}]",
             author=item.author, timestamp=item.timestamp, priority=item.priority,
+            project=item.project,
         ), notice, None, failed_models
 
     result, priority = _parse_response(raw, item)
@@ -450,6 +453,7 @@ def _summarize_one_item(
         source=item.source, kind=item.kind, title=item.title, url=item.url,
         summary=result,
         author=item.author, timestamp=item.timestamp, priority=priority,
+        project=item.project,
     ), notice, timing, failed_models
 
 

@@ -533,6 +533,85 @@ def _field_change_item(changes: list[dict]) -> SourceItem:
     )
 
 
+# ---------------------------------------------------------------------------
+# project field is threaded through every SummarizedItem construction path
+# ---------------------------------------------------------------------------
+
+def test_format_field_change_preserves_project():
+    item = _field_change_item([{"field": "status", "from": "In Progress", "to": "Done"}])
+    item.project = "Alpha"
+    result = _format_field_change(item)
+    assert result.project == "Alpha"
+
+
+def test_new_ticket_summary_preserves_project():
+    item = SourceItem(
+        source="jira", kind="new_ticket",
+        title="PROJ-2: Empty description",
+        url="https://example.com/browse/PROJ-2",
+        content="",
+        author="Bob",
+        timestamp=datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc),
+        project="Beta",
+        metadata={"assignee": "Alice", "description": ""},
+    )
+    config = _openai_config()
+    mock_client = MagicMock()
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        results = summarize_items([item], config)
+    assert results[0].project == "Beta"
+
+
+def test_llm_summarized_item_preserves_project():
+    item = _make_item(source="jira", content="A" * 200)
+    item.project = "Gamma"
+    config = _openai_config()
+    llm_reply = json.dumps({"summary": "Something happened."})
+    mock_message = MagicMock()
+    mock_message.content = llm_reply
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_response
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        results = summarize_items([item], config)
+    assert results[0].project == "Gamma"
+
+
+def test_llm_error_summary_preserves_project():
+    """Even the "[LLM error ...]" fallback summary must keep the item's project,
+    or that item silently drops out of its project's block in the email."""
+    item_fail = _make_item(source="jira", content="A" * 200)
+    item_fail.project = "Delta"
+    item_ok = _make_item(source="teams", content="B" * 200)
+    config = LLMConfig(provider="openai", api_key="sk-test", models=["gpt-4o"], llm_workers=1)
+
+    call_count = 0
+
+    def flaky_create(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("boom")
+        m = MagicMock()
+        m.choices[0].message.content = json.dumps({"summary": "ok"})
+        return m
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = flaky_create
+
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        results = summarize_items([item_fail, item_ok], config)
+
+    failed = next(r for r in results if r.summary.startswith("[LLM error"))
+    assert failed.project == "Delta"
+
+
 def test_format_field_change_without_unblocks_uses_plain_content():
     item = _field_change_item([{"field": "status", "from": "In Progress", "to": "Done"}])
     result = _format_field_change(item)

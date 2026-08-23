@@ -8,7 +8,7 @@ import pytest
 
 from digest.config import EmailConfig, SmtpConfig
 from digest.email_sender import (
-    TEMPLATES_DIR, _render_html, _safe_url,
+    TEMPLATES_DIR, _render_html, _safe_url, _build_sections,
     send_via_smtp, send_mgmt_summary_via_smtp,
 )
 from digest.models import MgmtSection, SourceItem, SummarizedItem
@@ -24,16 +24,19 @@ def _make_item(
     title: str = "Test ticket",
     url: str = "https://example.com/1",
     summary: str = "Something happened.",
+    kind: str = "comment",
+    project: str | None = None,
 ) -> SummarizedItem:
     return SummarizedItem(
         source=source,
-        kind="comment",
+        kind=kind,
         title=title,
         url=url,
         summary=summary,
         author="Alice",
         timestamp=datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc),
         priority=priority,
+        project=project,
     )
 
 
@@ -319,8 +322,8 @@ def test_smtp_mgmt_summary_multiple_sections_all_rendered():
 
 def test_action_needed_class_in_html():
     item = _make_item(priority="action_needed")
-    sections = {"updates": [item]}  # kind="comment" maps to "updates" group
-    html = _render_html(sections, "Test subject")
+    general = {"updates": [item]}  # kind="comment" maps to "updates" group
+    html = _render_html([], general, "Test subject")
     assert "action_needed" in html
 
 
@@ -461,6 +464,120 @@ def test_smtp_error_returns_false():
 # ---------------------------------------------------------------------------
 # items with unknown source are excluded from sections
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# _build_sections: per-project grouping
+# ---------------------------------------------------------------------------
+
+def test_build_sections_groups_items_by_project_and_kind():
+    items = [
+        _make_item(project="Project One", kind="comment"),
+        _make_item(project="Project One", kind="mention"),
+        _make_item(project="Project Two", kind="comment"),
+    ]
+    projects, general = _build_sections(items)
+    assert general == {}
+    by_name = {p["name"]: p["groups"] for p in projects}
+    assert set(by_name) == {"Project One", "Project Two"}
+    assert len(by_name["Project One"]["jira_comments"]) == 1
+    assert len(by_name["Project One"]["jira_mentions"]) == 1
+    assert len(by_name["Project Two"]["jira_comments"]) == 1
+
+
+def test_build_sections_items_without_project_go_to_general():
+    items = [
+        _make_item(source="teams", kind="channel_message", project=None),
+        _make_item(source="jira", kind="comment", project="Project One"),
+    ]
+    projects, general = _build_sections(items)
+    assert len(projects) == 1
+    assert projects[0]["name"] == "Project One"
+    assert "updates" in general
+    assert len(general["updates"]) == 1
+
+
+def test_build_sections_respects_project_order():
+    items = [
+        _make_item(project="Zebra", kind="comment"),
+        _make_item(project="Alpha", kind="comment"),
+    ]
+    projects, _ = _build_sections(items, project_order=["Alpha", "Zebra"])
+    assert [p["name"] for p in projects] == ["Alpha", "Zebra"]
+
+
+def test_build_sections_unlisted_project_appended_after_ordered_ones():
+    items = [
+        _make_item(project="Alpha", kind="comment"),
+        _make_item(project="Surprise", kind="comment"),
+    ]
+    projects, _ = _build_sections(items, project_order=["Alpha"])
+    assert [p["name"] for p in projects] == ["Alpha", "Surprise"]
+
+
+# ---------------------------------------------------------------------------
+# _render_html: project header visibility
+# ---------------------------------------------------------------------------
+
+def test_render_html_shows_project_headers_when_multiple_projects():
+    items = [
+        _make_item(project="Project One", kind="comment"),
+        _make_item(project="Project Two", kind="comment"),
+    ]
+    projects, general = _build_sections(items)
+    html = _render_html(projects, general, "Test subject")
+    assert "Project One" in html
+    assert "Project Two" in html
+    assert "project-header" in html
+
+
+def test_render_html_hides_project_header_for_single_project():
+    items = [_make_item(project="Only Project", kind="comment")]
+    projects, general = _build_sections(items)
+    html = _render_html(projects, general, "Test subject")
+    assert '<h2>Only Project</h2>' not in html
+
+
+def test_render_html_general_section_rendered_without_project_header():
+    items = [_make_item(source="teams", kind="channel_message", project=None)]
+    projects, general = _build_sections(items)
+    html = _render_html(projects, general, "Test subject")
+    assert '<div class="project-header">' not in html
+
+
+# ---------------------------------------------------------------------------
+# send_via_smtp: project_order threaded through to the rendered email
+# ---------------------------------------------------------------------------
+
+def test_smtp_send_orders_projects_per_project_order():
+    import email as email_mod
+    items = [
+        _make_item(project="Zebra", kind="comment", title="Z ticket"),
+        _make_item(project="Alpha", kind="comment", title="A ticket"),
+    ]
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = lambda s: s
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("smtplib.SMTP", return_value=mock_smtp),
+        patch("keyring.get_password", return_value="secret"),
+    ):
+        send_via_smtp(
+            items=items,
+            config=_default_config(),
+            smtp_cfg=_default_smtp(),
+            recipient="user@example.com",
+            now=_FIXED_NOW,
+            project_order=["Alpha", "Zebra"],
+        )
+
+    # The rendered HTML contains non-ASCII group icons, so smtplib base64-encodes
+    # the body -- decode it rather than substring-matching the raw MIME payload.
+    raw_msg = mock_smtp.sendmail.call_args.args[2]
+    parsed = email_mod.message_from_string(raw_msg)
+    html_body = parsed.get_payload()[0].get_payload(decode=True).decode("utf-8")
+    assert html_body.index("Alpha") < html_body.index("Zebra")
+
 
 def test_unknown_source_excluded():
     unknown_item = _make_item(source="slack")

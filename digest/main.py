@@ -528,6 +528,7 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
             timing=timing,
             m365_token=m365_token,
             command_line=command_line,
+            project_order=[p.name for p in config.atlassian.projects],
         )
     elif sys.platform == "win32":
         if not args.dry_run:
@@ -542,6 +543,7 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
             time_range=time_range,
             timing=timing,
             command_line=command_line,
+            project_order=[p.name for p in config.atlassian.projects],
         )
     else:
         raise RuntimeError(

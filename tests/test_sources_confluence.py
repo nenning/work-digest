@@ -163,6 +163,125 @@ def test_multiple_mentions_on_same_page_merge():
     assert "Also check this" in merged[0].content
 
 
+# ---------------------------------------------------------------------------
+# Project attribution
+# ---------------------------------------------------------------------------
+
+def test_page_update_tagged_with_owning_project():
+    page = dict(PAGE, space={"key": "ENG"})
+    responses = [
+        make_mock({"accountId": "user-abc"}),
+        make_mock({"results": []}),                          # mentions CQL
+        make_mock({"results": [page]}),                       # page updates CQL
+        make_mock({"version": {"when": "2026-04-09T06:00:00Z"}}),
+        make_mock(PREV_BODY),
+    ]
+    with patch("digest.sources.confluence.requests.get", side_effect=responses):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    page_updates = [i for i in items if i.kind == "page_update"]
+    assert len(page_updates) == 1
+    assert page_updates[0].project == "P1"
+
+
+def test_mention_on_configured_space_tagged_with_project():
+    mention = {
+        "title": "API Guidelines",
+        "space": {"key": "ENG"},
+        "_links": {"webui": "/spaces/ENG/pages/456"},
+        "history": {"createdBy": {"displayName": "Bob"}, "createdDate": "2026-04-09T08:00:00Z"},
+    }
+    responses = [
+        make_mock({"accountId": "user-abc"}),
+        make_mock({"results": [mention]}),
+        make_mock({"results": []}),
+    ]
+    with patch("digest.sources.confluence.requests.get", side_effect=responses):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    mentions = [i for i in items if i.kind == "mention"]
+    assert len(mentions) == 1
+    assert mentions[0].project == "P1"
+
+
+def test_mention_on_unconfigured_space_has_no_project():
+    """Mentions aren't space-scoped -- a mention outside every configured space
+    can't be attributed to a project, so it must fall back to None rather than
+    a guessed project."""
+    mention = {
+        "title": "Random Page",
+        "space": {"key": "OTHERSPACE"},
+        "_links": {"webui": "/spaces/OTHERSPACE/pages/999"},
+        "history": {"createdBy": {"displayName": "Bob"}, "createdDate": "2026-04-09T08:00:00Z"},
+    }
+    responses = [
+        make_mock({"accountId": "user-abc"}),
+        make_mock({"results": [mention]}),
+        make_mock({"results": []}),
+    ]
+    with patch("digest.sources.confluence.requests.get", side_effect=responses):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    mentions = [i for i in items if i.kind == "mention"]
+    assert len(mentions) == 1
+    assert mentions[0].project is None
+
+
+def test_multiple_projects_page_updates_each_tagged_with_owning_project():
+    cfg = AtlassianConfig(
+        url="https://example.atlassian.net",
+        email="u@e.com", api_token="tok",
+        projects=[
+            ProjectConfig(name="Alpha", jira=ProjectJiraConfig(project="ALPHA"),
+                          confluence=ProjectConfluenceConfig(spaces=["ENG"])),
+            ProjectConfig(name="Beta", jira=ProjectJiraConfig(project="BETA"),
+                          confluence=ProjectConfluenceConfig(spaces=["DOC"])),
+        ],
+    )
+    page_eng = dict(PAGE, id="p-eng", space={"key": "ENG"})
+    page_doc = dict(PAGE, id="p-doc", title="Doc Page", _links={"webui": "/spaces/DOC/pages/2"}, space={"key": "DOC"})
+    responses = [
+        make_mock({"accountId": "user-abc"}),
+        make_mock({"results": []}),                        # mentions CQL
+        make_mock({"results": [page_eng, page_doc]}),       # page updates CQL
+    ]
+    with patch("digest.sources.confluence.requests.get", side_effect=responses), \
+         patch("digest.sources.confluence._fetch_page_diff", return_value=("Added: something significant", [])):
+        items = fetch(cfg, "Basic xxx", SINCE)
+
+    page_updates = {i.title: i for i in items if i.kind == "page_update"}
+    assert page_updates["Sprint 14 Retro"].project == "Alpha"
+    assert page_updates["Doc Page"].project == "Beta"
+
+
+def test_merged_mention_and_page_update_propagates_project():
+    """A page both mentioned-in and updated merges into a single 'page' item --
+    the merged item must keep the project attribution, not drop it."""
+    mention = {
+        "title": "Sprint 14 Retro",
+        "type": "comment",
+        "id": "c1",
+        "space": {"key": "ENG"},
+        "_links": {"webui": "/spaces/ENG/pages/123?focusedCommentId=1#comment-1"},
+        "history": {"createdBy": {"displayName": "Bob"}, "createdDate": "2026-04-09T08:00:00Z"},
+    }
+    page = dict(PAGE, space={"key": "ENG"})
+    responses = [
+        make_mock({"accountId": "user-abc"}),                                   # user id
+        make_mock({"results": [mention]}),                                      # mentions CQL
+        make_mock({"body": {"storage": {"value": "<p>Please review</p>"}}}),    # mention comment body
+        make_mock({"results": [page]}),                                         # page updates CQL
+        make_mock({"version": {"when": "2026-04-09T06:00:00Z"}}),               # baseline metadata
+        make_mock(PREV_BODY),                                                   # baseline body
+    ]
+    with patch("digest.sources.confluence.requests.get", side_effect=responses):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    merged = [i for i in items if i.kind == "page"]
+    assert len(merged) == 1
+    assert merged[0].project == "P1"
+
+
 def test_invalid_space_key_raises():
     with pytest.raises(ValueError, match="Invalid Confluence space key"):
         _validate_space_keys(["lowercase"])

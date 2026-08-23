@@ -22,12 +22,26 @@ def fetch(config: AtlassianConfig, auth_header: str, since: datetime) -> List[So
     items: List[SourceItem] = []
     for group_config in _group_by_url(config):
         _validate_space_keys(group_config.confluence_spaces)
+        space_map = _space_to_project(group_config)
         user_account_id = _get_account_id(group_config, auth_header)
         # mentions use "created >" (when the mention was added)
         # page updates use "lastModified >" (when the page was last edited)
-        items.extend(_fetch_mentions(group_config, auth_header, user_account_id, since_cql))
-        items.extend(_fetch_page_updates(group_config, auth_header, since_cql, since))
+        items.extend(_fetch_mentions(group_config, auth_header, user_account_id, since_cql, space_map))
+        items.extend(_fetch_page_updates(group_config, auth_header, since_cql, since, space_map))
     return _merge_by_page(items)
+
+
+def _space_to_project(config: AtlassianConfig) -> dict:
+    """Map each configured Confluence space key to its owning project's display name.
+
+    Mentions aren't space-scoped (see _fetch_mentions), so a mention on a page outside
+    every configured space has no entry here -- callers treat that as project=None.
+    """
+    mapping: dict = {}
+    for project in config.projects:
+        for space in project.confluence.spaces:
+            mapping.setdefault(space, project.name)
+    return mapping
 
 
 def _group_by_url(config: AtlassianConfig) -> List[AtlassianConfig]:
@@ -73,7 +87,7 @@ _PAGE_SIZE = 50
 _MAX_SEARCH_PAGES = 200  # safety net: 200 * _PAGE_SIZE = 10,000 results
 
 
-def _cql_search(config: AtlassianConfig, auth_header: str, cql: str, expand: str = "history,version,ancestors") -> list:
+def _cql_search(config: AtlassianConfig, auth_header: str, cql: str, expand: str = "history,version,ancestors,space") -> list:
     """Page through CQL search results, following `_links.next`.
 
     Confluence Cloud's CQL search paginates via an opaque cursor in `_links.next`,
@@ -100,7 +114,9 @@ def _cql_search(config: AtlassianConfig, auth_header: str, cql: str, expand: str
     return results
 
 
-def _fetch_mentions(config: AtlassianConfig, auth_header: str, account_id: str, since_cql: str) -> List[SourceItem]:
+def _fetch_mentions(
+    config: AtlassianConfig, auth_header: str, account_id: str, since_cql: str, space_map: dict
+) -> List[SourceItem]:
     cql = f'mention = "{account_id}" AND created > "{since_cql}"'
     results = _cql_search(config, auth_header, cql)
     items = []
@@ -111,6 +127,7 @@ def _fetch_mentions(config: AtlassianConfig, auth_header: str, account_id: str, 
             content = _fetch_comment_body(config, auth_header, r["id"], author, r["title"])
         else:
             content = f"You were mentioned in '{r['title']}' by {author}."
+        space_key = (r.get("space") or {}).get("key")
         items.append(SourceItem(
             source="confluence", kind="mention",
             title=r["title"],
@@ -118,6 +135,7 @@ def _fetch_mentions(config: AtlassianConfig, auth_header: str, account_id: str, 
             content=content,
             author=author,
             timestamp=timestamp,
+            project=space_map.get(space_key),
         ))
     return items
 
@@ -140,7 +158,9 @@ def _fetch_comment_body(config: AtlassianConfig, auth_header: str, comment_id: s
     return f"You were mentioned in '{fallback_title}' by {author}."
 
 
-def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: str, since: datetime) -> List[SourceItem]:
+def _fetch_page_updates(
+    config: AtlassianConfig, auth_header: str, since_cql: str, since: datetime, space_map: dict
+) -> List[SourceItem]:
     if not config.confluence_spaces:
         return []
     spaces = " OR ".join(f'space = "{s}"' for s in config.confluence_spaces)
@@ -149,7 +169,7 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
     # mgmt_confluence.py's broad "contributor ever" search, there's no later filtering step
     # that would discard most matches -- fetching the current body alongside the search
     # avoids a guaranteed follow-up GET per page instead of speculatively pre-fetching.
-    results = _cql_search(config, auth_header, cql, expand="history,version,ancestors,body.storage")
+    results = _cql_search(config, auth_header, cql, expand="history,version,ancestors,body.storage,space")
 
     if not results:
         return []
@@ -164,6 +184,7 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
         diff, in_window_authors = result
         current_author = r.get("version", {}).get("by", {}).get("displayName") or "unknown"
         authors = sorted(set(in_window_authors) | {current_author})
+        space_key = (r.get("space") or {}).get("key")
         return SourceItem(
             source="confluence", kind="page_update",
             title=r["title"],  # clean title — no "Updated:" prefix
@@ -171,6 +192,7 @@ def _fetch_page_updates(config: AtlassianConfig, auth_header: str, since_cql: st
             content=diff,
             author=", ".join(authors),
             timestamp=_parse_dt(r.get("version", {}).get("when", since_cql + ":00Z")),
+            project=space_map.get(space_key),
         )
 
     items: List[SourceItem] = []
@@ -381,6 +403,7 @@ def _merge_by_page(items: List[SourceItem]) -> List[SourceItem]:
             content="\n\n".join(parts),
             author=max(page_items, key=lambda x: x.timestamp).author,
             timestamp=max(it.timestamp for it in page_items),
+            project=next((it.project for it in page_items if it.project), None),
         ))
 
     return merged

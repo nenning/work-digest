@@ -884,6 +884,82 @@ def test_status_change_not_to_done_no_unblocks():
     assert "unblocks" not in _status_change_item(items)
 
 
+def test_new_ticket_tagged_with_project_name():
+    mock_get, mock_post = _mock_responses([], new_ticket_issues=[{
+        "key": "PROJ-9",
+        "fields": {
+            "summary": "New thing",
+            "reporter": {"displayName": "Anna"},
+            "assignee": None,
+            "created": "2026-04-09T08:00:00Z",
+            "description": None,
+        },
+    }])
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    new_items = [i for i in items if i.kind == "new_ticket"]
+    assert len(new_items) == 1
+    assert new_items[0].project == "P1"
+
+
+def test_watched_items_tagged_with_owning_project_name():
+    cfg = AtlassianConfig(
+        url="https://example.atlassian.net",
+        email="u@e.com", api_token="tok",
+        projects=[
+            ProjectConfig(name="Alpha", jira=ProjectJiraConfig(project="ALPHA")),
+            ProjectConfig(name="Beta", jira=ProjectJiraConfig(project="BETA")),
+        ],
+    )
+    issue_a = copy.deepcopy(ISSUE_BASE)
+    issue_a["key"] = "ALPHA-1"
+    issue_a["fields"]["comment"]["comments"] = [
+        {"id": "1", "body": "hi", "author": {"displayName": "X"}, "updated": "2026-04-09T08:30:00Z"},
+    ]
+    issue_b = copy.deepcopy(ISSUE_BASE)
+    issue_b["key"] = "BETA-1"
+    issue_b["fields"]["comment"]["comments"] = [
+        {"id": "2", "body": "hi", "author": {"displayName": "Y"}, "updated": "2026-04-09T08:30:00Z"},
+    ]
+
+    def _get_side_effect(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        if "/myself" in url:
+            resp.json.return_value = CURRENT_USER
+        elif "/changelog" in url:
+            resp.json.return_value = {"values": []}
+        else:
+            resp.json.return_value = {}
+        return resp
+
+    def _post_side_effect(*args, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        jql = kwargs.get("json", {}).get("jql", "")
+        if "created >=" in jql:
+            resp.json.return_value = {"issues": []}
+        elif "ALPHA" in jql:
+            resp.json.return_value = {"issues": [issue_a]}
+        elif "BETA" in jql:
+            resp.json.return_value = {"issues": [issue_b]}
+        else:
+            resp.json.return_value = {"issues": []}
+        return resp
+
+    mock_get = MagicMock(side_effect=_get_side_effect)
+    mock_post = MagicMock(side_effect=_post_side_effect)
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(cfg, "Basic xxx", SINCE)
+
+    by_key = {i.title.split(":")[0]: i for i in items}
+    assert by_key["ALPHA-1"].project == "Alpha"
+    assert by_key["BETA-1"].project == "Beta"
+
+
 def test_jql_search_paginates_via_next_page_token():
     """A previous version of _jql_search fetched only the first 50 results and
     warned instead of paginating, silently dropping the rest -- mgmt_jira.py's
