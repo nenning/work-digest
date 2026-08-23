@@ -16,9 +16,12 @@ pip install -r requirements.txt
 python digest/main.py --dry-run
 python digest/main.py --dry-run --verbose   # debug a slow/stuck run
 
-# Run all tests / a single test file
-python -m pytest tests/ -v
-python -m pytest tests/test_summarizer.py -v
+# Run all tests / a single test file (pytest.ini defaults to -q --no-header)
+python -m pytest tests/
+python -m pytest tests/test_summarizer.py
+
+# Debugging a failure: verbose test names, short tracebacks
+python -m pytest tests/test_summarizer.py -v --tb=short
 ```
 
 Full CLI reference (all flags, personal digest + management summary examples,
