@@ -31,6 +31,7 @@ from digest.email_sender import (
 from digest.models import MgmtSection, SourceItem, SummarizedItem
 from digest.sources import confluence, jira, outlook, teams
 from digest.sources.mgmt_jira import (
+    build_ticket_queries,
     fetch_sprints,
     fetch_team_tickets,
     parse_sprint_specs,
@@ -377,6 +378,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             narrative=narrative,
             jira_items=jira_items,
             confluence_items=confluence_items,
+            ticket_queries=build_ticket_queries(jira_items, pconf.url, assume_done=args.assume_done),
         ))
 
     if not sections:

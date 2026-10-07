@@ -11,7 +11,9 @@ from digest.config import (
     ProjectJiraConfig,
     ProjectMgmtSummaryConfig,
 )
+from digest.models import SourceItem
 from digest.sources.mgmt_jira import (
+    build_ticket_queries,
     _extract_text,
     _parse_dt,
     _parse_dt_optional,
@@ -316,6 +318,40 @@ def test_fetch_team_tickets_combine_subtasks_requests_parent_field():
     with patch("digest.sources.mgmt_jira.requests.post", mock_post):
         fetch_team_tickets(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, combine_subtasks=True)
     assert "parent" in mock_post.call_args[1]["json"]["fields"]
+
+
+def _ticket(key, kind, is_subtask=False):
+    return SourceItem(
+        source="jira", kind=kind, title=f"{key}: t", url=f"https://x/browse/{key}",
+        content="", author="A", timestamp=SINCE,
+        metadata={"key": key, "is_subtask": is_subtask},
+    )
+
+
+def test_build_ticket_queries_splits_done_and_open_without_subtasks():
+    items = [
+        _ticket("T-1", "ticket_done"),
+        _ticket("T-2", "ticket_wip"),
+        _ticket("T-3", "ticket_todo"),
+        _ticket("T-4", "ticket_done", is_subtask=True),
+    ]
+    queries = build_ticket_queries(items, "https://example.atlassian.net")
+    assert [(label, jql) for label, jql, _ in queries] == [
+        ("Done tickets", "key in (T-1)"),
+        ("Open tickets", "key in (T-2, T-3)"),
+    ]
+    assert queries[0][2].startswith("https://example.atlassian.net/issues/?jql=key%20in%20")
+
+
+def test_build_ticket_queries_assume_done_is_single_query():
+    items = [_ticket("T-1", "ticket_done"), _ticket("T-2", "ticket_wip")]
+    queries = build_ticket_queries(items, "https://x", assume_done=True)
+    assert [(label, jql) for label, jql, _ in queries] == [("All tickets", "key in (T-1, T-2)")]
+
+
+def test_build_ticket_queries_omits_empty_groups():
+    queries = build_ticket_queries([_ticket("T-1", "ticket_done")], "https://x")
+    assert [label for label, _, _ in queries] == ["Done tickets"]
 
 
 def test_fetch_team_tickets_ignore_user():

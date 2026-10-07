@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Optional, Tuple
 
 Priority = Literal["action_needed", "meeting_invite", "fyi", "info"]
 
@@ -48,3 +48,4 @@ class MgmtSection:
     narrative: str
     jira_items: List[SourceItem]
     confluence_items: List[SummarizedItem]
+    ticket_queries: List[Tuple[str, str, str]] = field(default_factory=list)  # (label, jql, url)

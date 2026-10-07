@@ -406,6 +406,7 @@ def _render_mgmt_section(section: MgmtSection) -> dict:
         "wip_tickets": [i for i in section.jira_items if i.kind == "ticket_wip"],
         "todo_tickets": [i for i in section.jira_items if i.kind == "ticket_todo"],
         "confluence_items": section.confluence_items,
+        "ticket_queries": section.ticket_queries,
     }
 
 

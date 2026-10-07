@@ -250,6 +250,16 @@ def _make_mgmt_section(name="Project One") -> MgmtSection:
     )
 
 
+def test_mgmt_html_renders_ticket_queries():
+    from digest.email_sender import _render_mgmt_html
+    section = _make_mgmt_section()
+    section.ticket_queries = [("Done tickets", "key in (T-1, T-2)", "https://x/issues/?jql=key%20in")]
+    html = _render_mgmt_html([section], "subj")
+    assert "key in (T-1, T-2)" in html
+    assert "Done tickets" in html
+    assert 'href="https://x/issues/?jql=key%20in"' in html
+
+
 def test_smtp_mgmt_summary_dry_run_sends_preview_to_sender(capsys):
     mock_smtp = MagicMock()
     mock_smtp.__enter__ = lambda s: s

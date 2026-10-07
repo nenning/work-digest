@@ -5,6 +5,7 @@ import dataclasses
 import requests
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Tuple
+from urllib.parse import quote
 
 from digest.config import AtlassianConfig, MgmtSummaryConfig, ProjectConfig
 from digest.models import SourceItem
@@ -218,6 +219,8 @@ def fetch_team_tickets(
                 "status": status_name,
                 "status_category": status_category,
                 "assignee": assignee_name,
+                "key": key,
+                "is_subtask": bool((fields.get("issuetype") or {}).get("subtask")),
             },
         )
 
@@ -263,6 +266,28 @@ def fetch_team_tickets(
             "description": _extract_text(issue["fields"].get("description") or "")[:300],
         })
     return items + fetched_parents, team_account_ids
+
+
+def build_ticket_queries(
+    jira_items: List[SourceItem], base_url: str, assume_done: bool = False
+) -> List[Tuple[str, str, str]]:
+    """Return (label, jql, url) key-list queries over the non-sub-task tickets.
+
+    Two queries (done / still open), or a single one with assume_done since every
+    ticket then counts as done. Empty groups are omitted.
+    """
+    tickets = [i for i in jira_items if not i.metadata.get("is_subtask") and i.metadata.get("key")]
+    groups = [("All tickets", tickets)] if assume_done else [
+        ("Done tickets", [i for i in tickets if i.kind == "ticket_done"]),
+        ("Open tickets", [i for i in tickets if i.kind != "ticket_done"]),
+    ]
+    queries = []
+    for label, group in groups:
+        if not group:
+            continue
+        jql = f"key in ({', '.join(i.metadata['key'] for i in group)})"
+        queries.append((label, jql, f"{base_url}/issues/?jql={quote(jql)}"))
+    return queries
 
 
 def _paginate_jql(

@@ -48,6 +48,11 @@ Per project:
   the LLM to describe the combined outcome. The parent's status category
   decides the Done/In Progress/To Do group; sub-task statuses are only context
   for the LLM. The email's ticket list shows parents only.
+- Each section carries a "Jira queries" block built by
+  `mgmt_jira.build_ticket_queries()`: `key in (...)` over done tickets and over
+  the remaining open ones (sub-tasks excluded), each with a link to Jira's
+  issue search plus the raw JQL for pasting into Confluence. With
+  `--assume-done` it is a single query containing all tickets.
 
 ## `digest/sources/mgmt_jira.py`
 

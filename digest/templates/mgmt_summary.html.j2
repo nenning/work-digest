@@ -46,6 +46,15 @@
     .tickets-header::after {
       content: ""; flex: 1; height: 1px; background: #e2e8f0;
     }
+    .queries-section { padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; }
+    .query-block { margin-bottom: 14px; }
+    .query-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+    .query-label a { color: #0f172a; }
+    .query-jql {
+      font-family: "Courier New", Courier, monospace; font-size: 12px;
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px;
+      padding: 8px 10px; word-break: break-all; user-select: all;
+    }
     .section + .section {
       border-top: 8px solid #f1f5f9;
     }
@@ -150,6 +159,18 @@
             {% for para in section.narrative_paragraphs %}<p>{{ para }}</p>{% endfor %}
             {% endif %}
           </div>
+
+          {% if section.ticket_queries %}
+          <div class="tickets-section queries-section">
+            <div class="tickets-header">Jira queries</div>
+            {% for label, jql, url in section.ticket_queries %}
+            <div class="query-block">
+              <div class="query-label"><a href="{{ url | safe_url }}">{{ label }}</a></div>
+              <div class="query-jql">{{ jql }}</div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
 
           {% if section.done_tickets or section.wip_tickets or section.todo_tickets or section.confluence_items %}
           <div class="tickets-section">
