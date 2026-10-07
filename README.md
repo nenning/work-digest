@@ -269,6 +269,8 @@ Combine with `--dry-run` to see detailed output without sending email.
 
 - `python main.py --mgmt-summary --sprint current` — Team management summary for the active sprint
 - `python main.py --mgmt-summary --sprint "Sprint 42"` — Team management summary for a named sprint
+- `python main.py --mgmt-summary --sprint 1234` — Same, by sprint id
+- `python main.py --mgmt-summary --sprint "Sprint 225,226,227"` — One combined summary across several sprints (names and/or ids, comma-separated)
 - `python main.py --mgmt-summary --sprint "Sprint 42" --assume-done` — Same, treating in-progress as done
 - `python main.py --mgmt-summary --sprint current --short` — Very short executive bullet list (max 5 bullets)
 - `python main.py --mgmt-summary --sprint current --assume-done --short` — Short + assume done
@@ -319,6 +321,10 @@ python main.py --mgmt-summary --sprint current
 # Named sprint
 python main.py --mgmt-summary --sprint "Sprint 42"
 
+# Sprint by id, or several sprints combined into one summary (names and ids can be mixed)
+python main.py --mgmt-summary --sprint 1234
+python main.py --mgmt-summary --sprint "Sprint 225,226,227" --assume-done
+
 # Sprint summary as-if everything is done (useful before sprint end)
 python main.py --mgmt-summary --sprint "Sprint 42" --assume-done
 python main.py --mgmt-summary --sprint current --assume-done
@@ -338,7 +344,7 @@ python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29
 
 For each project with a `mgmt_summary` block:
 
-1. Resolves the project's own time range — for `--sprint`, looks up the sprint by name on that project's own `jira_board_id`, so different projects can resolve different date ranges for the same sprint name
+1. Resolves the project's own time range — for `--sprint`, looks up each sprint (by name or id) on that project's own `jira_board_id`, so different projects can resolve different date ranges for the same sprint name. With several sprints, tickets are selected via `sprint in (...)` and the Confluence window runs from the earliest sprint start to the latest sprint end
 2. Fetches that project's Jira tickets via `project = X AND (global mgmt_summary.jira_jql) AND (project's mgmt_summary.jira_jql_extra)`, filtering out ignored users (checked on both assignee and reporter) and ignored issue types
 3. Collects team members from the remaining tickets' assignees/reporters
 4. Fetches Confluence pages those team members edited in the same window, scoped to the project's `confluence.spaces`; edits by an ignored user are excluded here too

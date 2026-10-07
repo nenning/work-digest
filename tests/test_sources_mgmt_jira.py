@@ -16,7 +16,9 @@ from digest.sources.mgmt_jira import (
     _parse_dt,
     _parse_dt_optional,
     fetch_sprint,
+    fetch_sprints,
     fetch_team_tickets,
+    parse_sprint_specs,
     resolve_project_mgmt_config,
 )
 
@@ -113,6 +115,18 @@ def test_fetch_sprint_paginated():
     assert mock_get.call_count == 2
 
 
+def test_fetch_sprint_by_numeric_id():
+    sprints = [
+        {"id": 1, "name": "Sprint 1"},
+        {"id": 225, "name": "Team Alpha Iteration", "startDate": "2026-05-01T00:00:00Z", "endDate": "2026-05-14T00:00:00Z"},
+    ]
+    mock_get = MagicMock(return_value=_sprint_resp(sprints))
+    with patch("digest.sources.mgmt_jira.requests.get", mock_get):
+        sid, _, _, name = fetch_sprint(make_atlassian_config(), AUTH, 1, " 225 ")
+    assert sid == 225
+    assert name == "Team Alpha Iteration"
+
+
 def test_fetch_sprint_not_found():
     mock_get = MagicMock(return_value=_sprint_resp([{"id": 1, "name": "Sprint X"}]))
     with patch("digest.sources.mgmt_jira.requests.get", mock_get):
@@ -136,6 +150,51 @@ def test_fetch_sprint_current_no_active_sprint():
     with patch("digest.sources.mgmt_jira.requests.get", mock_get):
         with pytest.raises(ValueError, match="No active sprint"):
             fetch_sprint(make_atlassian_config(), AUTH, 1, "current")
+
+
+# ---------------------------------------------------------------------------
+# parse_sprint_specs / fetch_sprints
+# ---------------------------------------------------------------------------
+
+def test_parse_sprint_specs_splits_strips_and_drops_empties():
+    assert parse_sprint_specs(" Sprint 225, 226 ,,227 ") == ["Sprint 225", "226", "227"]
+
+
+def test_parse_sprint_specs_single_value():
+    assert parse_sprint_specs("current") == ["current"]
+
+
+def test_fetch_sprints_combines_names_and_ids_into_one_window():
+    sprints = [
+        {"id": 225, "name": "Sprint 225", "startDate": "2026-05-01T00:00:00Z", "endDate": "2026-05-14T00:00:00Z"},
+        {"id": 226, "name": "Sprint 226", "startDate": "2026-05-15T00:00:00Z", "endDate": "2026-05-28T00:00:00Z"},
+        {"id": 227, "name": "Sprint 227", "startDate": "2026-05-29T00:00:00Z", "endDate": "2026-06-11T00:00:00Z"},
+    ]
+    mock_get = MagicMock(return_value=_sprint_resp(sprints))
+    with patch("digest.sources.mgmt_jira.requests.get", mock_get):
+        ids, since, until, names = fetch_sprints(
+            make_atlassian_config(), AUTH, 1, ["Sprint 227", "225", "sprint 226"]
+        )
+    assert ids == [227, 225, 226]
+    assert since == datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
+    assert until == datetime(2026, 6, 11, 0, 0, 0, tzinfo=timezone.utc)
+    assert names == ["Sprint 227", "Sprint 225", "Sprint 226"]
+
+
+def test_fetch_sprints_dedupes_repeated_sprint():
+    sprint = {"id": 5, "name": "Sprint 5", "startDate": "2026-05-01T00:00:00Z", "endDate": "2026-05-14T00:00:00Z"}
+    mock_get = MagicMock(return_value=_sprint_resp([sprint]))
+    with patch("digest.sources.mgmt_jira.requests.get", mock_get):
+        ids, _, _, names = fetch_sprints(make_atlassian_config(), AUTH, 1, ["Sprint 5", "5"])
+    assert ids == [5]
+    assert names == ["Sprint 5"]
+
+
+def test_fetch_sprints_unknown_sprint_raises():
+    mock_get = MagicMock(return_value=_sprint_resp([{"id": 1, "name": "Sprint 1"}]))
+    with patch("digest.sources.mgmt_jira.requests.get", mock_get):
+        with pytest.raises(ValueError, match="'999' not found"):
+            fetch_sprints(make_atlassian_config(), AUTH, 1, ["Sprint 1", "999"])
 
 
 # ---------------------------------------------------------------------------
@@ -163,13 +222,21 @@ def test_fetch_team_tickets_basic():
     assert "r1" in account_ids
 
 
-def test_fetch_team_tickets_sprint_id_in_jql():
+def test_fetch_team_tickets_sprint_ids_in_jql():
     mock_post = MagicMock(return_value=_search_resp([]))
     with patch("digest.sources.mgmt_jira.requests.post", mock_post):
-        fetch_team_tickets(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, sprint_id=42)
+        fetch_team_tickets(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, sprint_ids=[225, 226, 227])
     body = mock_post.call_args[1]["json"]
-    assert "sprint = 42" in body["jql"]
+    assert "sprint in (225, 226, 227)" in body["jql"]
     assert "updated >=" not in body["jql"]
+
+
+def test_fetch_team_tickets_single_sprint_id_in_jql():
+    mock_post = MagicMock(return_value=_search_resp([]))
+    with patch("digest.sources.mgmt_jira.requests.post", mock_post):
+        fetch_team_tickets(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, sprint_ids=[42])
+    body = mock_post.call_args[1]["json"]
+    assert "sprint in (42)" in body["jql"]
 
 
 def test_fetch_team_tickets_no_sprint_id_uses_date_range():

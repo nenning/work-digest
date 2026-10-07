@@ -33,12 +33,13 @@ def fetch_sprint(
     board_id: int,
     sprint_name: str,
 ) -> Tuple[int, datetime, datetime, str]:
-    """Find a sprint by name on the given board.
+    """Find a sprint by name or numeric id on the given board.
 
     Pass sprint_name="current" to automatically select the active sprint.
     Returns (sprint_id, start_dt, end_dt, label). Raises ValueError if not found.
     """
-    if sprint_name.strip().lower() == "current":
+    wanted = sprint_name.strip().lower()
+    if wanted == "current":
         return _fetch_active_sprint(config, auth_header, board_id)
 
     headers = {"Authorization": auth_header, "Accept": "application/json"}
@@ -53,7 +54,7 @@ def fetch_sprint(
         resp.raise_for_status()
         data = resp.json()
         for sprint in data.get("values", []):
-            if sprint.get("name", "").strip().lower() == sprint_name.strip().lower():
+            if sprint.get("name", "").strip().lower() == wanted or str(sprint.get("id")) == wanted:
                 start_dt = _parse_dt_optional(sprint.get("startDate"))
                 end_dt = _parse_dt_optional(sprint.get("endDate"))
                 return sprint["id"], start_dt, end_dt, sprint["name"]
@@ -62,7 +63,35 @@ def fetch_sprint(
         start_at += len(data.get("values", []))
     raise ValueError(
         f"Sprint {sprint_name!r} not found on board {board_id}. "
-        "Check jira_board_id in config and the sprint name (case-insensitive match)."
+        "Check jira_board_id in config and the sprint name (case-insensitive match) or id."
+    )
+
+
+def parse_sprint_specs(value: str) -> List[str]:
+    """Split a comma-separated --sprint value into individual names/ids."""
+    return [s.strip() for s in value.split(",") if s.strip()]
+
+
+def fetch_sprints(
+    config: AtlassianConfig,
+    auth_header: str,
+    board_id: int,
+    specs: List[str],
+) -> Tuple[List[int], datetime, datetime, List[str]]:
+    """Resolve several sprints (names, ids or "current") into one combined window.
+
+    Returns (sprint_ids, earliest_start, latest_end, names), in the order given and
+    without duplicates. Raises ValueError if any sprint is not found.
+    """
+    resolved: dict[int, Tuple[datetime, datetime, str]] = {}
+    for spec in specs:
+        sid, start_dt, end_dt, name = fetch_sprint(config, auth_header, board_id, spec)
+        resolved.setdefault(sid, (start_dt, end_dt, name))
+    return (
+        list(resolved),
+        min(s for s, _, _ in resolved.values()),
+        max(e for _, e, _ in resolved.values()),
+        [n for _, _, n in resolved.values()],
     )
 
 
@@ -98,7 +127,7 @@ def fetch_team_tickets(
     mgmt_cfg: MgmtSummaryConfig,
     since: datetime,
     until: datetime,
-    sprint_id: Optional[int] = None,
+    sprint_ids: Optional[List[int]] = None,
 ) -> Tuple[List[SourceItem], Set[str]]:
     """Fetch all team tickets matching the configured JQL.
 
@@ -108,8 +137,9 @@ def fetch_team_tickets(
     since_str = since.strftime("%Y-%m-%d %H:%M")
     until_str = until.strftime("%Y-%m-%d %H:%M")
 
-    if sprint_id is not None:
-        jql = f"({mgmt_cfg.jira_jql}) AND sprint = {sprint_id} ORDER BY status ASC, updated DESC"
+    if sprint_ids:
+        id_list = ", ".join(str(i) for i in sprint_ids)
+        jql = f"({mgmt_cfg.jira_jql}) AND sprint in ({id_list}) ORDER BY status ASC, updated DESC"
     else:
         jql = (
             f"({mgmt_cfg.jira_jql}) AND updated >= \"{since_str}\" "

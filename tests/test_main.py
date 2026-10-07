@@ -126,6 +126,38 @@ def test_mgmt_summary_sprint_missing_board_id_raises(tmp_path, monkeypatch):
             main()
 
 
+def test_mgmt_summary_multiple_sprints_combined_into_one_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--sprint", "Sprint 225, 226,227"])
+    project = ProjectConfig(
+        name="P1", jira=ProjectJiraConfig(project="PROJ"),
+        mgmt_summary=ProjectMgmtSummaryConfig(jira_board_id=7),
+    )
+    config = _make_mgmt_config(tmp_path, [project])
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    until = datetime(2026, 6, 11, tzinfo=timezone.utc)
+
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_sprints",
+              return_value=([225, 226, 227], since, until,
+                            ["Sprint 225", "Sprint 226", "Sprint 227"])) as mock_sprints,
+        patch("digest.main.fetch_team_tickets", return_value=([_make_ticket()], {"a1"})) as mock_tickets,
+        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.main.synthesize_mgmt_summary", return_value="Combined.") as mock_synth,
+        patch("digest.main.send_mgmt_summary_via_smtp") as mock_send,
+    ):
+        from digest.main import main
+        main()
+
+    assert mock_sprints.call_args.args[3] == ["Sprint 225", "226", "227"]
+    assert mock_tickets.call_args.kwargs["sprint_ids"] == [225, 226, 227]
+    label = mock_synth.call_args.kwargs["label"]
+    assert "Sprint 225, Sprint 226, Sprint 227" in label
+    assert "2026-05-01" in label and "2026-06-11" in label
+    assert len(mock_send.call_args.args[0]) == 1
+
+
 def test_mgmt_summary_single_project_sends_one_section(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
     project = ProjectConfig(

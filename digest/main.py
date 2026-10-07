@@ -30,7 +30,12 @@ from digest.email_sender import (
 )
 from digest.models import MgmtSection, SourceItem, SummarizedItem
 from digest.sources import confluence, jira, outlook, teams
-from digest.sources.mgmt_jira import fetch_sprint, fetch_team_tickets, resolve_project_mgmt_config
+from digest.sources.mgmt_jira import (
+    fetch_sprints,
+    fetch_team_tickets,
+    parse_sprint_specs,
+    resolve_project_mgmt_config,
+)
 from digest.sources.mgmt_confluence import fetch_team_pages
 from digest.state import get_last_run, load_state, process_lock, save_state
 from digest.summarizer import LLMEndpointError, summarize_items, synthesize_mgmt_summary
@@ -144,8 +149,9 @@ def main() -> None:
     parser.add_argument(
         "--sprint",
         default=None,
-        metavar="NAME",
-        help="Sprint name for management summary (auto-derives start/end dates from Jira board)",
+        metavar="SPRINTS",
+        help="Sprint name, sprint id or 'current' for management summary; comma-separate several "
+             "(e.g. 'Sprint 225,226,227') for one combined view. Dates are derived from the Jira board.",
     )
     parser.add_argument(
         "--assume-done",
@@ -232,7 +238,8 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         )
 
     # Validate mutually exclusive time options
-    has_sprint = bool(args.sprint)
+    sprint_specs = parse_sprint_specs(args.sprint) if args.sprint else []
+    has_sprint = bool(sprint_specs)
     has_range = bool(args.from_date or args.to_date)
     has_since = bool(args.since)
     if sum([has_sprint, has_range, has_since]) > 1:
@@ -265,7 +272,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
     # --- Run-level label for subject/header (per-project sprint dates can differ,
     # so this is a description of the run, not a single resolved date span) ---
     if has_sprint:
-        run_label = args.sprint
+        run_label = ", ".join(sprint_specs)
     elif has_since:
         run_label = f"{parse_since(args.since).strftime('%Y-%m-%d')} - {now_utc.strftime('%Y-%m-%d')}"
     else:
@@ -293,14 +300,15 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
 
         # --- Resolve this project's own time range ---
         if has_sprint:
-            print(f"  Looking up sprint {args.sprint!r} on board {project.mgmt_summary.jira_board_id}...")
-            sprint_id, since, until, sprint_label = fetch_sprint(
-                pconf, atlassian_auth, project.mgmt_summary.jira_board_id, args.sprint
+            print(f"  Looking up sprint(s) {', '.join(sprint_specs)} on board {project.mgmt_summary.jira_board_id}...")
+            sprint_ids, since, until, sprint_names = fetch_sprints(
+                pconf, atlassian_auth, project.mgmt_summary.jira_board_id, sprint_specs
             )
+            sprint_label = ", ".join(sprint_names)
             label = f"{sprint_label} ({since.date()} - {until.date()})"
-            print(f"    Sprint found: {sprint_label} ({since.date()} - {until.date()})")
+            print(f"    Sprint(s) found: {label}")
         else:
-            sprint_id = None
+            sprint_ids = None
             if has_since:
                 since = parse_since(args.since)
                 until = now_utc
@@ -312,7 +320,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         # --- Fetch Jira team tickets ---
         mgmt_cfg = resolve_project_mgmt_config(project, config.mgmt_summary)
         jira_items, team_account_ids = fetch_team_tickets(
-            pconf, atlassian_auth, mgmt_cfg, since, until, sprint_id=sprint_id
+            pconf, atlassian_auth, mgmt_cfg, since, until, sprint_ids=sprint_ids
         )
         done_n = sum(1 for i in jira_items if i.kind == "ticket_done")
         wip_n  = sum(1 for i in jira_items if i.kind == "ticket_wip")
