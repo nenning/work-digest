@@ -272,6 +272,7 @@ Combine with `--dry-run` to see detailed output without sending email.
 - `python main.py --mgmt-summary --sprint 1234` — Same, by sprint id
 - `python main.py --mgmt-summary --sprint "Sprint 225,226,227"` — One combined summary across several sprints (names and/or ids, comma-separated)
 - `python main.py --mgmt-summary --sprint "Sprint 42" --assume-done` — Same, treating in-progress as done
+- `python main.py --mgmt-summary --sprint current --combine-subtasks` — Fold sub-tasks into their parent: no sub-task rows in the ticket list, one combined summary per parent
 - `python main.py --mgmt-summary --sprint current --short` — Very short executive bullet list (max 5 bullets)
 - `python main.py --mgmt-summary --sprint current --assume-done --short` — Short + assume done
 - `python main.py --mgmt-summary --since 7d` — Team summary for the last 7 days

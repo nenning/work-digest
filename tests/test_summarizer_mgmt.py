@@ -94,6 +94,32 @@ def test_synthesize_prompt_contains_section_headers():
     assert "TODO" in prompt
 
 
+def test_synthesize_prompt_nests_subtasks_under_parent():
+    parent = _make_jira_item(kind="ticket_wip", title="TEAM-1: Parent work", status="In Progress")
+    parent.metadata["subtasks"] = [
+        {"title": "TEAM-2: Wire up API", "status": "Done", "assignee": "Bob", "description": "Adds the endpoint"},
+    ]
+    mock_client = _mock_openai_client("ok")
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        synthesize_mgmt_summary([parent], [], _openai_config(), label="Sprint 7")
+    prompt = mock_client.chat.completions.create.call_args[1]["messages"][0]["content"]
+    assert "TEAM-2: Wire up API" in prompt
+    assert "Bob" in prompt and "Done" in prompt
+    assert "Adds the endpoint" in prompt
+    assert "subtask" in prompt.lower()
+    assert "Total tickets: 1" in prompt
+
+
+def test_synthesize_prompt_has_no_subtask_hint_without_subtasks():
+    mock_client = _mock_openai_client("ok")
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = mock_client
+        synthesize_mgmt_summary([_make_jira_item()], [], _openai_config(), label="Sprint 7")
+    prompt = mock_client.chat.completions.create.call_args[1]["messages"][0]["content"]
+    assert "subtask" not in prompt.lower()
+
+
 def test_synthesize_short_flag_prompt():
     mock_client = _mock_openai_client("- Item one\n- Item two")
     with patch("digest.summarizer.openai") as mock_openai:

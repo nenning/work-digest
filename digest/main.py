@@ -159,6 +159,12 @@ def main() -> None:
         help="In management summary: treat in-progress tickets as completed in the narrative",
     )
     parser.add_argument(
+        "--combine-subtasks",
+        action="store_true",
+        help="In management summary: fold sub-tasks into their parent ticket instead of listing "
+             "them separately, so the summary covers each parent and its sub-tasks as one unit",
+    )
+    parser.add_argument(
         "--short",
         action="store_true",
         help="In management summary: produce a very short executive bullet list instead of paragraphs",
@@ -320,7 +326,8 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         # --- Fetch Jira team tickets ---
         mgmt_cfg = resolve_project_mgmt_config(project, config.mgmt_summary)
         jira_items, team_account_ids = fetch_team_tickets(
-            pconf, atlassian_auth, mgmt_cfg, since, until, sprint_ids=sprint_ids
+            pconf, atlassian_auth, mgmt_cfg, since, until, sprint_ids=sprint_ids,
+            combine_subtasks=args.combine_subtasks,
         )
         done_n = sum(1 for i in jira_items if i.kind == "ticket_done")
         wip_n  = sum(1 for i in jira_items if i.kind == "ticket_wip")

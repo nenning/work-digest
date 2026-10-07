@@ -128,11 +128,17 @@ def fetch_team_tickets(
     since: datetime,
     until: datetime,
     sprint_ids: Optional[List[int]] = None,
+    combine_subtasks: bool = False,
 ) -> Tuple[List[SourceItem], Set[str]]:
     """Fetch all team tickets matching the configured JQL.
 
     Returns (items, team_account_ids) where team_account_ids is the set of
     assignee/reporter accountIds, used to filter Confluence pages.
+
+    With combine_subtasks, sub-tasks are not returned as items of their own: each is
+    attached to its parent's item as metadata["subtasks"]. A parent outside the result
+    set is fetched by key; a sub-task whose parent can't be found (or is ignored) stays
+    a standalone item.
     """
     since_str = since.strftime("%Y-%m-%d %H:%M")
     until_str = until.strftime("%Y-%m-%d %H:%M")
@@ -149,16 +155,16 @@ def fetch_team_tickets(
     ignore_names = {u.lower() for u in (mgmt_cfg.ignore_users or [])}
     ignore_types = {t.lower() for t in (mgmt_cfg.ignore_issue_types or [])}
 
-    issues = _paginate_jql(config, auth_header, jql)
+    extra_fields = ["parent"] if combine_subtasks else []
+    issues = _paginate_jql(config, auth_header, jql, extra_fields)
 
-    items: List[SourceItem] = []
     team_account_ids: Set[str] = set()
 
-    for issue in issues:
+    def _parse(issue: dict) -> Optional[SourceItem]:
         fields = issue["fields"]
         issue_type = (fields.get("issuetype") or {}).get("name", "")
         if issue_type.lower() in ignore_types:
-            continue
+            return None
 
         assignee = fields.get("assignee") or {}
         reporter = fields.get("reporter") or {}
@@ -168,7 +174,7 @@ def fetch_team_tickets(
         reporter_name = reporter.get("displayName") or ""
 
         if assignee_name.lower() in ignore_names:
-            continue
+            return None
 
         if assignee_id:
             team_account_ids.add(assignee_id)
@@ -200,7 +206,7 @@ def fetch_team_tickets(
         content = " ".join(content_parts)
 
         updated_str = fields.get("updated") or fields.get("created", "")
-        items.append(SourceItem(
+        return SourceItem(
             source="jira",
             kind=kind,
             title=f"{key}: {summary_text}",
@@ -213,12 +219,55 @@ def fetch_team_tickets(
                 "status_category": status_category,
                 "assignee": assignee_name,
             },
-        ))
+        )
 
-    return items, team_account_ids
+    parsed = [(issue, _parse(issue)) for issue in issues]
+
+    if not combine_subtasks:
+        return [item for _, item in parsed if item is not None], team_account_ids
+
+    def _subtask_parent(issue: dict) -> Optional[str]:
+        fields = issue["fields"]
+        if (fields.get("issuetype") or {}).get("subtask"):
+            return (fields.get("parent") or {}).get("key")
+        return None
+
+    parents: dict = {
+        issue["key"]: item for issue, item in parsed
+        if item is not None and _subtask_parent(issue) is None
+    }
+    missing = sorted({
+        pk for issue, item in parsed
+        if item is not None and (pk := _subtask_parent(issue)) and pk not in parents
+    })
+    fetched_parents: List[SourceItem] = []
+    if missing:
+        for issue in _paginate_jql(config, auth_header, f"key in ({', '.join(missing)})"):
+            item = _parse(issue)
+            if item is not None:
+                parents[issue["key"]] = item
+                fetched_parents.append(item)
+
+    items: List[SourceItem] = []
+    for issue, item in parsed:
+        if item is None:
+            continue
+        parent = parents.get(_subtask_parent(issue) or "")
+        if parent is None:
+            items.append(item)
+            continue
+        parent.metadata.setdefault("subtasks", []).append({
+            "title": item.title,
+            "status": item.metadata["status"],
+            "assignee": item.metadata["assignee"],
+            "description": _extract_text(issue["fields"].get("description") or "")[:300],
+        })
+    return items + fetched_parents, team_account_ids
 
 
-def _paginate_jql(config: AtlassianConfig, auth_header: str, jql: str) -> list:
+def _paginate_jql(
+    config: AtlassianConfig, auth_header: str, jql: str, extra_fields: Optional[List[str]] = None
+) -> list:
     # /rest/api/3/search/jql uses cursor-based pagination (nextPageToken), not startAt.
     headers = {
         "Authorization": auth_header,
@@ -226,6 +275,7 @@ def _paginate_jql(config: AtlassianConfig, auth_header: str, jql: str) -> list:
         "Content-Type": "application/json",
     }
     fields = ["summary", "assignee", "reporter", "status", "issuetype", "description", "updated", "created"]
+    fields += extra_fields or []
     all_issues: list = []
     next_page_token: Optional[str] = None
 

@@ -61,8 +61,9 @@ def _search_resp(issues, is_last=True, next_page_token=None):
 
 def _make_issue(key="TEAM-1", summary="Do the thing", status_name="In Progress",
                 status_key="indeterminate", assignee_id="a1", assignee_name="Alice",
-                reporter_id="r1", reporter_name="Reporter", issue_type="Story", description=None):
-    return {
+                reporter_id="r1", reporter_name="Reporter", issue_type="Story", description=None,
+                parent_key=None, is_subtask=False):
+    issue = {
         "key": key,
         "fields": {
             "summary": summary,
@@ -72,12 +73,15 @@ def _make_issue(key="TEAM-1", summary="Do the thing", status_name="In Progress",
             },
             "assignee": {"accountId": assignee_id, "displayName": assignee_name},
             "reporter": {"accountId": reporter_id, "displayName": reporter_name},
-            "issuetype": {"name": issue_type},
+            "issuetype": {"name": issue_type, "subtask": is_subtask},
             "description": description,
             "updated": "2026-05-10T09:00:00Z",
             "created": "2026-05-01T08:00:00Z",
         },
     }
+    if parent_key:
+        issue["fields"]["parent"] = {"key": parent_key}
+    return issue
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +250,72 @@ def test_fetch_team_tickets_no_sprint_id_uses_date_range():
     body = mock_post.call_args[1]["json"]
     assert "updated >=" in body["jql"]
     assert "sprint" not in body["jql"]
+
+
+def _subtask(key="TEAM-2", parent="TEAM-1", **kwargs):
+    return _make_issue(key, summary="Sub work", issue_type="Sub-task",
+                       parent_key=parent, is_subtask=True, **kwargs)
+
+
+def test_fetch_team_tickets_keeps_subtasks_standalone_by_default():
+    issues = [_make_issue("TEAM-1"), _subtask()]
+    mock_post = MagicMock(return_value=_search_resp(issues))
+    with patch("digest.sources.mgmt_jira.requests.post", mock_post):
+        items, _ = fetch_team_tickets(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL)
+    assert [i.title.split(":")[0] for i in items] == ["TEAM-1", "TEAM-2"]
+    assert "subtasks" not in items[0].metadata
+
+
+def test_fetch_team_tickets_combine_subtasks_folds_into_parent_in_result_set():
+    issues = [
+        _make_issue("TEAM-1", summary="Parent work"),
+        _subtask("TEAM-2", status_name="Done", status_key="done", assignee_name="Bob", assignee_id="b1"),
+    ]
+    mock_post = MagicMock(return_value=_search_resp(issues))
+    with patch("digest.sources.mgmt_jira.requests.post", mock_post):
+        items, account_ids = fetch_team_tickets(
+            make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, combine_subtasks=True
+        )
+    assert len(items) == 1
+    assert items[0].title == "TEAM-1: Parent work"
+    subs = items[0].metadata["subtasks"]
+    assert len(subs) == 1
+    assert subs[0]["title"] == "TEAM-2: Sub work"
+    assert subs[0]["status"] == "Done"
+    assert subs[0]["assignee"] == "Bob"
+    assert "b1" in account_ids
+    assert mock_post.call_count == 1
+
+
+def test_fetch_team_tickets_combine_subtasks_fetches_missing_parent():
+    sub_resp = _search_resp([_subtask("TEAM-2", parent="TEAM-9")])
+    parent_resp = _search_resp([_make_issue("TEAM-9", summary="Outside parent")])
+    mock_post = MagicMock(side_effect=[sub_resp, parent_resp])
+    with patch("digest.sources.mgmt_jira.requests.post", mock_post):
+        items, _ = fetch_team_tickets(
+            make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, combine_subtasks=True
+        )
+    parent_jql = mock_post.call_args_list[1][1]["json"]["jql"]
+    assert "key in (TEAM-9)" in parent_jql
+    assert [i.title for i in items] == ["TEAM-9: Outside parent"]
+    assert items[0].metadata["subtasks"][0]["title"] == "TEAM-2: Sub work"
+
+
+def test_fetch_team_tickets_combine_subtasks_orphan_stays_standalone():
+    sub_resp = _search_resp([_subtask("TEAM-2", parent="TEAM-9")])
+    mock_post = MagicMock(side_effect=[sub_resp, _search_resp([])])
+    with patch("digest.sources.mgmt_jira.requests.post", mock_post):
+        items, _ = fetch_team_tickets(
+            make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, combine_subtasks=True
+        )
+    assert [i.title for i in items] == ["TEAM-2: Sub work"]
+
+
+def test_fetch_team_tickets_combine_subtasks_requests_parent_field():
+    mock_post = MagicMock(return_value=_search_resp([]))
+    with patch("digest.sources.mgmt_jira.requests.post", mock_post):
+        fetch_team_tickets(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, combine_subtasks=True)
+    assert "parent" in mock_post.call_args[1]["json"]["fields"]
 
 
 def test_fetch_team_tickets_ignore_user():

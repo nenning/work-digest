@@ -608,7 +608,12 @@ def synthesize_mgmt_summary(
         desc_start = item.content.find(". ", item.content.find(". ") + 1)
         desc = item.content[desc_start + 2:desc_start + 2 + _MAX_TICKET_DESC_CHARS].strip() if desc_start >= 0 else ""
         base = f"- {item.title} [{assignee}]"
-        return f"{base}: {desc}" if desc else base
+        line = f"{base}: {desc}" if desc else base
+        for sub in item.metadata.get("subtasks", []):
+            sub_desc = (sub.get("description") or "")[:_MAX_TICKET_DESC_CHARS].strip()
+            sub_line = f"\n    - subtask {sub['title']} [{sub['assignee']}, {sub['status']}]"
+            line += f"{sub_line}: {sub_desc}" if sub_desc else sub_line
+        return line
 
     def _fmt_section(items: "List[SourceItem]", label_str: str) -> str:
         if not items:
@@ -633,6 +638,12 @@ def synthesize_mgmt_summary(
         assume_instruction = "Clearly distinguish between what is done and what is still in progress."
 
     total_tickets = len(jira_items)
+
+    if any(i.metadata.get("subtasks") for i in jira_items):
+        assume_instruction += (
+            "\nSome tickets list indented subtasks. Treat each ticket and its subtasks as one "
+            "unit of work: describe the combined outcome, never the subtasks individually."
+        )
 
     if short:
         prompt = (

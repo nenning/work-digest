@@ -158,6 +158,29 @@ def test_mgmt_summary_multiple_sprints_combined_into_one_section(tmp_path, monke
     assert len(mock_send.call_args.args[0]) == 1
 
 
+@pytest.mark.parametrize("extra_args, expected", [([], False), (["--combine-subtasks"], True)])
+def test_mgmt_summary_combine_subtasks_flag_passed_to_fetch(tmp_path, monkeypatch, extra_args, expected):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d", *extra_args])
+    project = ProjectConfig(
+        name="P1", jira=ProjectJiraConfig(project="PROJ"),
+        mgmt_summary=ProjectMgmtSummaryConfig(),
+    )
+    config = _make_mgmt_config(tmp_path, [project])
+
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=([_make_ticket()], {"a1"})) as mock_tickets,
+        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.main.synthesize_mgmt_summary", return_value="ok"),
+        patch("digest.main.send_mgmt_summary_via_smtp"),
+    ):
+        from digest.main import main
+        main()
+
+    assert mock_tickets.call_args.kwargs["combine_subtasks"] is expected
+
+
 def test_mgmt_summary_single_project_sends_one_section(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
     project = ProjectConfig(

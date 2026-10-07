@@ -39,6 +39,15 @@ Per project:
   summaries.
 - The `--assume-done` flag instructs the LLM to present in-progress and todo
   tickets as completed.
+- `--combine-subtasks` folds sub-tasks into their parent: `fetch_team_tickets()`
+  drops them from the item list and attaches each to its parent's
+  `metadata["subtasks"]` (title/status/assignee/description). A parent outside
+  the result set (e.g. only the sub-task was in the sprint) is fetched by key
+  and added; a sub-task whose parent can't be found or is an ignored type stays
+  standalone. The synthesis prompt nests sub-tasks under the parent and tells
+  the LLM to describe the combined outcome. The parent's status category
+  decides the Done/In Progress/To Do group; sub-task statuses are only context
+  for the LLM. The email's ticket list shows parents only.
 
 ## `digest/sources/mgmt_jira.py`
 
