@@ -212,7 +212,7 @@ def test_multi_value_field_swap_pairs_removal_and_addition_per_history():
 
 
 def test_multi_value_field_reverted_across_histories_is_dropped():
-    # EGOV-595: Fix Version was swapped PI 3 -> PI 1 -> PI 3 (back to the original).
+    # PROJ-595: Fix Version was swapped PI 3 -> PI 1 -> PI 3 (back to the original).
     # The two swaps must chain to a net no-op and be dropped entirely, not report
     # a stray "PI 3 -> —" from an unpaired removal fragment.
     issue = copy.deepcopy(ISSUE_BASE)
@@ -667,16 +667,16 @@ def test_link_field_change_includes_ticket_summary():
     issue["changelog"]["histories"] = [{
         "created": "2026-04-09T08:00:00Z",
         "author": {"displayName": "Anna"},
-        "items": [{"field": "Link", "fromString": None, "toString": "This work item blocks EGOV-648"}],
+        "items": [{"field": "Link", "fromString": None, "toString": "This work item blocks PROJ-648"}],
     }]
-    mock_get, mock_post = _make_enrichment_mocks(issue, {"EGOV-648": "Fix login bug"})
+    mock_get, mock_post = _make_enrichment_mocks(issue, {"PROJ-648": "Fix login bug"})
     with patch("digest.sources.jira.requests.get", mock_get), \
          patch("digest.sources.jira.requests.post", mock_post):
         items = fetch(make_config(), "Basic xxx", SINCE)
 
     changes = [i for i in items if i.kind == "field_change"]
     assert len(changes) == 1
-    assert "EGOV-648 (Fix login bug)" in changes[0].content
+    assert "PROJ-648 (Fix login bug)" in changes[0].content
 
 
 def test_issue_parent_association_field_change_includes_summary():
@@ -684,17 +684,17 @@ def test_issue_parent_association_field_change_includes_summary():
     issue["changelog"]["histories"] = [{
         "created": "2026-04-09T08:00:00Z",
         "author": {"displayName": "Anna"},
-        "items": [{"field": "IssueParentAssociation", "fromString": "EGOV-58", "toString": "EGOV-9"}],
+        "items": [{"field": "IssueParentAssociation", "fromString": "PROJ-58", "toString": "PROJ-9"}],
     }]
-    mock_get, mock_post = _make_enrichment_mocks(issue, {"EGOV-58": "Old parent", "EGOV-9": "New parent"})
+    mock_get, mock_post = _make_enrichment_mocks(issue, {"PROJ-58": "Old parent", "PROJ-9": "New parent"})
     with patch("digest.sources.jira.requests.get", mock_get), \
          patch("digest.sources.jira.requests.post", mock_post):
         items = fetch(make_config(), "Basic xxx", SINCE)
 
     changes = [i for i in items if i.kind == "field_change"]
     assert len(changes) == 1
-    assert "EGOV-58 (Old parent)" in changes[0].content
-    assert "EGOV-9 (New parent)" in changes[0].content
+    assert "PROJ-58 (Old parent)" in changes[0].content
+    assert "PROJ-9 (New parent)" in changes[0].content
 
 
 def _remote_link_issue(quoted_title):

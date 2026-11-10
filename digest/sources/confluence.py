@@ -7,6 +7,7 @@ import requests
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
+from digest import problems
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
 
@@ -110,7 +111,7 @@ def _cql_search(config: AtlassianConfig, auth_header: str, cql: str, expand: str
             return results
         url = data["_links"]["base"] + next_link
         params = None  # the next link already encodes cql/expand/limit/cursor
-    log.warning("Confluence search hit the %d-page safety cap; results may be incomplete", _MAX_SEARCH_PAGES)
+    problems.report("confluence", f"Confluence search hit the {_MAX_SEARCH_PAGES}-page safety cap; results are incomplete")
     return results
 
 
@@ -154,7 +155,11 @@ def _fetch_comment_body(config: AtlassianConfig, auth_header: str, comment_id: s
         if text:
             return f"{author} hat dich in einem Kommentar erwähnt:\n{text}"
     except requests.RequestException as exc:
-        log.warning("Failed to fetch comment body %s: %s", comment_id, exc)
+        problems.report(
+            "confluence",
+            f"Could not fetch the text of a comment on '{fallback_title}' ({exc}); showing a generic mention instead",
+            lossy=False,
+        )
     return f"You were mentioned in '{fallback_title}' by {author}."
 
 
@@ -197,14 +202,18 @@ def _fetch_page_updates(
 
     items: List[SourceItem] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(results), 8)) as executor:
-        futures = [executor.submit(_fetch_one, r) for r in results]
+        futures = {executor.submit(_fetch_one, r): r for r in results}
         for future in concurrent.futures.as_completed(futures):
             try:
                 item = future.result()
                 if item is not None:
                     items.append(item)
             except Exception as exc:
-                log.warning("Failed to fetch page diff: %s", exc)
+                problems.report(
+                    "confluence",
+                    f"Changes of page '{futures[future].get('title', '?')}' could not be fetched "
+                    f"({exc.__class__.__name__}: {exc})",
+                )
     return items
 
 
@@ -241,7 +250,11 @@ def _fetch_page_diff(
             )
             resp.raise_for_status()
             version = resp.json().get("version", {})
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            problems.report(
+                "confluence",
+                f"Version history of page {page_id} could not be read at version {v} ({exc}); its changes are not shown",
+            )
             break
         when_str = version.get("when", "")
         if not when_str:
@@ -266,8 +279,12 @@ def _fetch_page_diff(
         )
         prev.raise_for_status()
         prev_body = prev.json().get("body", {}).get("storage", {}).get("value", "")
-    except requests.RequestException:
-        return None  # gracefully skip if diff fetch fails
+    except requests.RequestException as exc:
+        problems.report(
+            "confluence",
+            f"Previous version {baseline} of page {page_id} could not be fetched ({exc}); its changes are not shown",
+        )
+        return None
 
     curr_text = _storage_to_text(current_body)
     prev_text = _storage_to_text(prev_body)

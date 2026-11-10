@@ -24,6 +24,15 @@ place.
 **New tickets** come via a separate JQL query. JQL search paginates via
 `nextPageToken`/`isLast` (`POST /rest/api/3/search/jql`).
 
+**Summaries:** `new_ticket` and `field_change` items are formatted directly, without an LLM
+call. `mention` items get an action-focused prompt that names who mentioned the user and
+what is expected. Content under 100 chars is quoted verbatim; longer content gets a 2–4
+sentence summary.
+
+**Email sections:** Jira is grouped into four ordered sections — Erwähnungen (mentions) →
+Kommentare & Beschreibungen → Neue Tickets → Feldänderungen. Confluence appears before all
+of them.
+
 **Authorship:** merged comment, mention, and field_change items credit every
 distinct author involved (comma-joined), not just whoever's edit landed last
 — field_change authorship is drawn from the pre-merge per-history entries so

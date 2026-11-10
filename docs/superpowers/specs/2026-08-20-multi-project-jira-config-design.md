@@ -44,14 +44,14 @@ atlassian:
   cloud_id: ...
 
   projects:
-    - name: EGOV                                   # display label (mgmt-summary headings, logs)
+    - name: PROJ                                   # display label (mgmt-summary headings, logs)
       jira:
-        project: EGOV                              # Jira project key
+        project: PROJ                              # Jira project key
         jql_extra: '"Team[Team]"=981844de-...'     # optional, AND'd onto this project's personal-digest queries
       confluence:
         spaces: [ENG]                              # optional
       mgmt_summary:                                # optional -- omitting excludes this project from --mgmt-summary
-        jira_jql_extra: '...'                      # optional, AND'd onto "project = EGOV" + global mgmt_summary.jira_jql
+        jira_jql_extra: '...'                      # optional, AND'd onto "project = PROJ" + global mgmt_summary.jira_jql
         jira_board_id: 123                         # optional, required only for --sprint on this project
       # url: https://other-tenant.atlassian.net    # optional -- overrides atlassian.url for this project's requests only
 

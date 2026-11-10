@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Tuple
 
+from digest import problems
 from digest.config import AtlassianConfig, MgmtSummaryConfig
 from digest.models import SourceItem
 from digest.sources.confluence import _compute_diff, _storage_to_text
@@ -113,13 +114,17 @@ def fetch_team_pages(
 
     items: List[SourceItem] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(results), 8)) as executor:
-        futures = [executor.submit(_resolve, r) for r in results]
+        futures = {executor.submit(_resolve, r): r for r in results}
         for future in concurrent.futures.as_completed(futures):
             try:
                 item = future.result()
-            except requests.RequestException:
+            except requests.RequestException as exc:
                 # e.g. a page we lost access to between search and fetch -- skip it
                 # rather than losing every other page's result in the same batch.
+                problems.report(
+                    "mgmt-confluence",
+                    f"Page '{futures[future].get('title', '?')}' could not be fetched ({exc}); it is missing from the summary",
+                )
                 continue
             if item is not None:
                 items.append(item)
@@ -154,7 +159,7 @@ def _search_all(config: AtlassianConfig, headers: dict, cql: str) -> List[dict]:
             return results
         url = data["_links"]["base"] + next_link
         params = None  # the next link already encodes cql/expand/limit/cursor
-    log.warning("Confluence search hit the %d-page safety cap; results may be incomplete", _MAX_SEARCH_PAGES)
+    problems.report("mgmt-confluence", f"Confluence search hit the {_MAX_SEARCH_PAGES}-page safety cap; results are incomplete")
     return results
 
 
@@ -228,7 +233,14 @@ def _walk_version_history(
             )
             resp.raise_for_status()
             version = resp.json().get("version", {})
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            # Aborting here leaves the baseline unknown, which downstream reads as "page
+            # created inside the window" -- the whole page would be reported as new content.
+            problems.report(
+                "mgmt-confluence",
+                f"Version history of page {page_id} could not be read at version {v} ({exc}); "
+                "its diff may be wrong or the page missing",
+            )
             break
 
         when = _when(version)
@@ -275,7 +287,11 @@ def _diff_against_baseline(
         )
         curr.raise_for_status()
         curr_body = curr.json().get("body", {}).get("storage", {}).get("value", "")
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        problems.report(
+            "mgmt-confluence",
+            f"Version {version_num} of page {page_id} could not be fetched ({exc}); the page is missing from the summary",
+        )
         return None
 
     if baseline_version is None:
@@ -290,7 +306,12 @@ def _diff_against_baseline(
             )
             prev.raise_for_status()
             prev_body = prev.json().get("body", {}).get("storage", {}).get("value", "")
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            problems.report(
+                "mgmt-confluence",
+                f"Baseline version {baseline_version} of page {page_id} could not be fetched ({exc}); "
+                "the page is missing from the summary",
+            )
             return None
 
     return _compute_diff(_storage_to_text(prev_body), _storage_to_text(curr_body))

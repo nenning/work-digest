@@ -16,6 +16,10 @@ Confluence Cloud ignores a client-incremented `start` past page 1 (verified
 against a live instance that `start=0/50/100` all return the same first
 page).
 
+**Summaries:** page-update diffs are summarized by the LLM (content under 100 chars is
+quoted verbatim, longer gets 2–4 sentences). Cosmetic-only diffs return
+`{"summary": null}` and the item is skipped.
+
 **Authorship:** `page_update` author is every distinct editor within the
 window (comma-joined), not just the current version's — the backward walk to
 the pre-window baseline already fetches each intermediate version's metadata

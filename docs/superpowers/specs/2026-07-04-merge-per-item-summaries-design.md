@@ -6,7 +6,7 @@ Today, each Jira comment (or description change, or mention) on the same ticket
 produces its own `SourceItem`, and each goes through the LLM separately,
 producing one email digest entry per comment. Example: a ticket with two
 comments added since the last run currently shows up as two separate
-"📋 JIRA EGOV-1201: ..." entries under "Kommentare & Beschreibungen" instead of
+"📋 JIRA PROJ-1201: ..." entries under "Kommentare & Beschreibungen" instead of
 one combined summary.
 
 Confluence already merges mention + page-update items that share the same

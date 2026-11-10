@@ -43,10 +43,11 @@ pip install -r requirements.txt
 | `m365.client_id` | No | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` | Custom Azure AD app ID; required if your tenant blocks the Azure CLI public client (AADSTS65002) |
 | `llm.provider` | Yes | `openai` | LLM provider: `openai`, `anthropic`, or `azure_openai` |
 | `llm.api_key` | Yes | `sk-...` (OpenAI) or `sk-ant-...` (Anthropic) | API key for LLM provider |
-| `llm.model` | Yes | `gpt-4o` | Comma-separated model list (e.g., `"gpt-4o, gpt-4o-mini"`). Items are distributed round-robin; all models run in parallel. |
+| `llm.summary_models` | Yes | `gpt-4o-mini` | Model(s) for per-item summaries, comma-separated or YAML list (e.g., `"gpt-4o, gpt-4o-mini"`). Items are distributed round-robin; all models run in parallel and the others are the failover for a failing call. |
 | `llm.endpoint` | No | `https://...` | Optional custom endpoint (overrides provider default) |
-| `llm.fallback_model` | No | `gpt-4o-mini` | Comma-separated fallback list, tried in order after all primary models fail |
 | `llm.llm_workers` | No | `4` | Parallel LLM calls during summarization (default: 4) |
+| `llm.heavy_models` | No | `claude-sonnet-5-5` | Model(s) for heavy calls: everything of `--mgmt-summary`, spec monitor change request / delta spec / rewrites. Empty = `llm.summary_models` |
+| `llm.vision_model` | No | `claude-opus-5-5` | Single model for the spec monitor's draw.io image comparison. Empty = first of `llm.heavy_models`, else `llm.summary_models` |
 | `schedule.times` | Yes | `["08:00", "13:00", "17:00"]` | List of times (24-hour HH:MM) to run digest |
 | `email.subject_prefix` | No | `[Digest]` | Prefix for digest email subject (default: `[Digest]`) |
 | `data_dir` | No | `~/.digest` | Where to store state and token cache (default: `~/.digest`) |
@@ -277,6 +278,19 @@ Combine with `--dry-run` to see detailed output without sending email.
 - `python main.py --mgmt-summary --sprint current --assume-done --short` — Short + assume done
 - `python main.py --mgmt-summary --since 7d` — Team summary for the last 7 days
 - `python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29` — Team summary for an explicit date range
+
+### Spec Source Monitor Mode
+
+Checks the sources pinned in the "Quellen" table of the Confluence detail specs and, for every spec whose sources changed, generates a change request (plain language) and a delta specification. Needs a `spec_monitor` block in `config.yaml` (optional `gitlab` block for repo documents); see `digest/config.yaml.example` and `docs/architecture/spec-monitor.md`.
+
+- `python main.py --spec-monitor --dry-run` — Run everything, write `<data_dir>/spec_cache/preview.html` instead of sending
+- `python main.py --spec-monitor` — Send the report mail
+- `python main.py --spec-monitor --spec "API CustomerManagement"` — Only one spec (page title or page id)
+- `python main.py --spec-monitor --publish-page` — Also create a Confluence page (empty effort fields) under `spec_monitor.confluence_page.parent_page_id`
+- `python main.py --spec-monitor --all-states` — Give every spec the full analysis, whatever its status (ignores `analysis_states`)
+- `python main.py --create-ticket "API CustomerManagement"` — Analyse that spec and create a Jira ticket with its delta (needs `spec_monitor.ticket`; `--dry-run` only writes a local draft)
+- `python main.py --update-spec` — Create an updated copy of **every analysed spec** that has changes (Quellen table and text-only affected sections brought up to the latest source versions) as a new sibling Confluence page titled "<spec> (aktualisiert <date>)"; originals are never modified. `--all-states` includes specs of every status
+- `python main.py --update-spec "API CustomerManagement"` — Same for **one spec only**; the value can be the page title, the page id or the Confluence URL (`--spec` and `--create-ticket` accept a URL too). `--dry-run` only writes previews to `<data_dir>/spec_cache/`
 
 ## Management Summary Mode
 

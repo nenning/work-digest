@@ -68,11 +68,16 @@ m365:
 llm:
   provider: openai              # openai | anthropic | azure_openai
   api_key: "sk-..."
-  model: gpt-4o                  # comma-separated for multiple: "gpt-4o, gpt-4o-mini"
+  summary_models: gpt-4o-mini    # required — model(s) for per-item summaries (digest, spec monitor diff summaries);
+                                 # comma-separated string or YAML list: items are distributed round-robin, the others are the failover
   endpoint: "https://..."        # optional — overrides provider default
-  fallback_model: gpt-4o-mini    # optional — comma-separated list, tried in order after all primary models fail
   # llm_workers: 4              # optional — parallel LLM calls during summarization (default: 4)
   # llm_timeout: 30             # optional — seconds before a single LLM call is cancelled and the next model tried (default: 30)
+  # heavy_models: gpt-4o        # optional — model(s) for the HEAVY calls: everything of --mgmt-summary, spec monitor change
+  #                             # request / delta spec, --update-spec section rewrites, source extraction, vision fallback
+  #                             # (same format; empty/absent = summary_models)
+  # vision_model: gpt-4o        # optional — single model for the spec monitor's draw.io image comparison fallback
+  #                             # (empty/absent = first of heavy_models, else summary_models). Same provider/key as above.
 
 schedule:
   times: ["08:00", "13:00"]
@@ -101,3 +106,57 @@ data_dir: ~/.digest
 #   recipient: ""                         # optional — who to send the summary to (defaults to email.recipient).
 #                                          # Single global recipient — no per-project override; one email is
 #                                          # always sent to one recipient.
+
+# Spec source monitor (--spec-monitor flag). Optional — only needed for that mode.
+# Finds the detail specifications below a Confluence parent page, reads the sources
+# each one pins in its "Quellen" table and reports which sources changed since.
+# spec_monitor:
+#   parent_page_id: "668860602"          # specs are searched below this page
+#   selector:                            # how a page below it is recognised as a spec
+#     type: page_properties_id           # or: label
+#     value: DETAILSPEC                  # the Page Properties macro ID, or the label name
+#   analysis_states: [Refined, Abgenommen, Angenommen]   # states that get the full analysis (case-insensitive);
+#                                        # every other state is only listed in the report
+#   recipient: ""                        # optional — falls back to mgmt_summary.recipient, then email.recipient
+#   excluded_source_markers: ["Notizen", "Arbeitsnotizen", "Vorgängerfassung"]
+#                                        # source rows whose name or "Verwendet für" contains one are excluded
+#   llm_timeout: 240                     # seconds per LLM call of this mode (summaries, change request, rewrites)
+#   workers: 4                           # parallel source lookups and diff summaries per spec
+#   retry:                               # applies to every outgoing call of this mode
+#     attempts: 3
+#     backoff_seconds: 2                 # doubled per attempt; Retry-After honoured on 429
+#     timeout_seconds: 60                # per HTTP request; downloads get twice this
+#   confluence_page:
+#     parent_page_id: "..."              # where --publish-page creates the report page; required only for that flag
+#   ticket:                              # only needed for --create-ticket
+#     project: PROJ                      # Jira project key of the created ticket
+#     issue_type: Story
+#     labels: [cr]                       # 'spec-monitor' is always added
+#     priority: Medium
+#     team_id: "<team id>"               # raw id string for the team custom field
+#     team_field: customfield_10001      # custom field that holds the team (default)
+#     parent: PROJ-123                   # optional parent (e.g. a Feature)
+#     fields: {}                         # extra raw Jira fields, passed through as given
+#     remote_link: true                  # add the Confluence page as a web link on the ticket
+#     link_type: Relates                 # link to the Jira tickets named on the spec page
+
+# GitLab connection for repository sources (ADRs, API concept in the diagram repo).
+# Optional; without it repo sources are listed as "not monitored". Only the doc folder of each
+# repository is configured: the monitor finds the referenced document there by path, ADR number
+# or name. Unreachable repositories never fail the run; they are reported in the output.
+# gitlab:
+#   url: https://gitlab.example.com
+#   api_token: "glpat-..."               # read_api scope is enough
+#   default_project: application         # NAME of the repository used for rows that say "im Repository"
+#   repositories:
+#     - name: application
+#       project: group/application       # full "group/project" path or numeric project id
+#       docs_folder: docs                # folder (or list: docs_folders: [docs, architecture]) searched for documents
+#       # default_branch: main
+#     - name: Diagramm-Repository        # text in a source row that selects this repository (default: the name)
+#       project: group/diagrams
+#       docs_folder: "."                 # "." = documents live in the repository root
+#       # match: ["Diagramm-Repository"] # optional, extra selection texts
+#       # documents:                     # optional explicit aliases, only if the search guesses wrong
+#       #   - match: "API-Konzept"
+#       #     path: API-Konzept.adoc

@@ -56,8 +56,7 @@ def fetch_sprint(
         data = resp.json()
         for sprint in data.get("values", []):
             if sprint.get("name", "").strip().lower() == wanted or str(sprint.get("id")) == wanted:
-                start_dt = _parse_dt_optional(sprint.get("startDate"))
-                end_dt = _parse_dt_optional(sprint.get("endDate"))
+                start_dt, end_dt = _sprint_window(sprint)
                 return sprint["id"], start_dt, end_dt, sprint["name"]
         if data.get("isLast", True):
             break
@@ -117,8 +116,7 @@ def _fetch_active_sprint(
             "Use --sprint 'Sprint Name' to target a specific sprint by name."
         )
     sprint = values[0]
-    start_dt = _parse_dt_optional(sprint.get("startDate"))
-    end_dt = _parse_dt_optional(sprint.get("endDate"))
+    start_dt, end_dt = _sprint_window(sprint)
     return sprint["id"], start_dt, end_dt, sprint["name"]
 
 
@@ -331,6 +329,16 @@ def _paginate_jql(
 
 def _parse_dt(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def _sprint_window(sprint: dict) -> Tuple[datetime, datetime]:
+    """Start/end of a sprint; a missing date would otherwise silently become "now" and skew the window."""
+    if not sprint.get("startDate") or not sprint.get("endDate"):
+        raise ValueError(
+            f"Sprint {sprint.get('name')!r} (id {sprint.get('id')}) has no start/end date in Jira "
+            "(not started yet?). Use --since or --from/--to instead."
+        )
+    return _parse_dt(sprint["startDate"]), _parse_dt(sprint["endDate"])
 
 
 def _parse_dt_optional(s: Optional[str]) -> datetime:

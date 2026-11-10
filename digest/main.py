@@ -21,9 +21,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from digest import problems
 from digest.auth.atlassian import get_auth_header, resolve_atlassian_config
 from digest.auth.microsoft import get_token
-from digest.config import load_config
+from digest.config import heavy_llm, load_config
 from digest.email_sender import (
     send_via_smtp, send_via_com,
     send_mgmt_summary_via_smtp, send_mgmt_summary_via_com,
@@ -44,6 +45,16 @@ from digest.summarizer import LLMEndpointError, summarize_items, synthesize_mgmt
 log = logging.getLogger(__name__)
 
 ALL_SOURCES = ["jira", "confluence", "teams", "outlook"]
+_MAX_ENDPOINT_ATTEMPTS = 3
+
+
+def _print_notices(notices: List[str]) -> None:
+    if not notices:
+        return
+    print()
+    print(f"  {len(notices)} problem(s) during this run:")
+    for n in notices:
+        print(f"    - {n}")
 
 
 def parse_since(s: str) -> datetime:
@@ -170,6 +181,49 @@ def main() -> None:
         action="store_true",
         help="In management summary: produce a very short executive bullet list instead of paragraphs",
     )
+    # Spec source monitor mode
+    parser.add_argument(
+        "--spec-monitor",
+        action="store_true",
+        help="Check the sources of the Confluence detail specs for changes and generate "
+             "change request + delta spec (see docs/architecture/spec-monitor.md)",
+    )
+    parser.add_argument(
+        "--spec",
+        default=None,
+        metavar="TITLE_OR_ID",
+        help="In spec monitor: restrict to one spec (page title or page id)",
+    )
+    parser.add_argument(
+        "--publish-page",
+        action="store_true",
+        help="In spec monitor: also create a Confluence page with the collected details",
+    )
+    parser.add_argument(
+        "--all-states",
+        action="store_true",
+        help="In spec monitor: give every spec the full analysis, whatever its status "
+             "(ignores spec_monitor.analysis_states)",
+    )
+    parser.add_argument(
+        "--create-ticket",
+        default=None,
+        metavar="TITLE_OR_ID",
+        help="Spec monitor follow-up: analyse this spec and create a Jira ticket with its delta "
+             "(with --dry-run only a local draft is written)",
+    )
+    parser.add_argument(
+        "--update-spec",
+        nargs="?",
+        const="*",
+        default=None,
+        metavar="TITLE_ID_OR_URL",
+        help="Spec monitor follow-up: create an updated copy of a spec (Quellen table and text-only "
+             "affected sections brought up to the latest source versions) as a NEW sibling Confluence page "
+             "with the date in the title; the original is never modified. Give a page title, page id or "
+             "Confluence URL to update only that spec; without a value every analysed spec gets a copy "
+             "(with --dry-run only previews are written)",
+    )
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -223,16 +277,35 @@ def main() -> None:
         print("SMTP authentication stored successfully.")
         return
 
+    spec_mode = args.spec_monitor or bool(args.create_ticket) or bool(args.update_spec)
+    if sum([bool(args.spec_monitor), bool(args.create_ticket), bool(args.update_spec)]) > 1:
+        parser.error("--spec-monitor, --create-ticket and --update-spec are mutually exclusive")
+    if spec_mode and args.mgmt_summary:
+        parser.error("the spec monitor modes and --mgmt-summary are mutually exclusive")
+    if (args.spec or args.publish_page) and not args.spec_monitor:
+        parser.error("--spec and --publish-page require --spec-monitor")
+    if args.all_states and not (args.spec_monitor or args.update_spec):
+        parser.error("--all-states requires --spec-monitor or --update-spec")
+
     with process_lock(data_dir):
-        if args.mgmt_summary:
+        if spec_mode:
+            from digest.spec_monitor.cli import dispatch
+            dispatch(args, config, cache_file, command_line)
+        elif args.mgmt_summary:
             _run_mgmt_summary(args, config, cache_file, command_line)
         else:
-            while True:
+            # Bounded: the scheduled task is killed after an hour without any error shown, so an
+            # endless wait on a dead LLM endpoint would end as a silent non-run.
+            for attempt in range(1, _MAX_ENDPOINT_ATTEMPTS + 1):
                 try:
                     _run(args, config, state_file, cache_file, command_line)
                     break
                 except LLMEndpointError as exc:
-                    log.warning("%s -- waiting 10 min before retry", exc)
+                    if attempt == _MAX_ENDPOINT_ATTEMPTS:
+                        raise RuntimeError(
+                            f"{exc} -- gave up after {attempt} attempts; no digest was sent and state was not updated"
+                        ) from exc
+                    log.warning("%s -- waiting 10 min before retry (%d/%d)", exc, attempt, _MAX_ENDPOINT_ATTEMPTS)
                     time.sleep(600)
 
 
@@ -300,6 +373,8 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
     print()
 
     sections: List[MgmtSection] = []
+    notices: List[str] = []
+    problems.clear()
 
     for project in mgmt_projects:
         print(f"=== {project.name} ===")
@@ -343,14 +418,19 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             )
             print(f"  {len(confluence_items)} page(s) with team changes")
         except Exception as exc:
-            print(f"  WARNING: Confluence fetch failed ({exc.__class__.__name__}: {exc}); skipping.")
+            msg = f"{project.name}: Confluence fetch failed ({exc.__class__.__name__}: {exc}); pages are missing from the summary"
+            print(f"  WARNING: {msg}")
+            notices.append(msg)
             confluence_items = []
+        notices.extend(f"{project.name}: {m}" for m in problems.take("mgmt-confluence")[0])
 
         # Reuse the personal digest's per-item LLM summarization so each page (including
         # brand-new ones, diffed against an empty baseline) gets the same 1-2 sentence
         # summary and cosmetic-only changes are skipped the same way.
         if confluence_items:
-            confluence_items = summarize_items(confluence_items, config.llm, language=config.language)
+            confluence_items = summarize_items(
+                confluence_items, heavy_llm(config.llm), notices=notices, language=config.language
+            )
             print(f"  {len(confluence_items)} page(s) summarized")
 
         if not jira_items and not confluence_items:
@@ -363,7 +443,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         narrative = synthesize_mgmt_summary(
             jira_items,
             confluence_items,
-            config.llm,
+            heavy_llm(config.llm),
             label=label,
             assume_done=args.assume_done,
             language=config.language,
@@ -382,6 +462,9 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         ))
 
     if not sections:
+        _print_notices(notices)
+        if notices:
+            raise RuntimeError("Nothing found and errors occurred:\n  - " + "\n  - ".join(notices))
         print("Nothing found for the given time range.")
         return
 
@@ -395,19 +478,19 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
     if config.smtp:
         if not args.dry_run:
             print(f"Sending via SMTP to {recipient}...")
-        send_mgmt_summary_via_smtp(
+        sent = send_mgmt_summary_via_smtp(
             sections,
             subject, config.email, config.smtp, recipient,
-            dry_run=args.dry_run, time_range=time_range,
+            dry_run=args.dry_run, time_range=time_range, notices=notices,
             m365_token=m365_token, command_line=command_line,
         )
     elif sys.platform == "win32":
         if not args.dry_run:
             print(f"Sending via Outlook COM to {recipient}...")
-        send_mgmt_summary_via_com(
+        sent = send_mgmt_summary_via_com(
             sections,
             subject, config.email, recipient,
-            dry_run=args.dry_run, time_range=time_range,
+            dry_run=args.dry_run, time_range=time_range, notices=notices,
             command_line=command_line,
         )
     else:
@@ -416,9 +499,16 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             "Add an smtp: block to config.yaml and run --setup-smtp-auth."
         )
 
+    _print_notices(notices)
+    if not sent:
+        raise RuntimeError("Management summary could not be delivered (see the 'Failed to send' error above).")
+
 
 def _run(args, config, state_file: Path, cache_file: Path, command_line: str) -> None:
+    problems.clear()  # a retry after LLMEndpointError must not inherit the previous attempt's problems
+    notices: List[str] = []
     state = load_state(state_file)
+    notices.extend(problems.take("state")[0])
 
     # Authenticate with both backends
     atlassian_auth = get_auth_header(config.atlassian)
@@ -483,7 +573,6 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
     print("Fetching...")
     all_items: List[SourceItem] = []
     fetched_sources: List[str] = []
-    notices: List[str] = []
     t_fetch_start = time.monotonic()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -494,16 +583,34 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
             src = future_to_src[future]
             try:
                 items = future.result()
-                print(f"  {src:<12} {len(items):>3} item(s)")
-                all_items.extend(items)
-                fetched_sources.append(src)
             except Exception as exc:
                 log.warning("Failed to fetch %s: %s", src, exc)
-                notices.append(f"Could not fetch {src}: {exc}")
+                notices.append(f"Could not fetch {src}: {exc.__class__.__name__}: {exc}")
+                notices.extend(problems.take(src)[0])
+                print(f"  {src:<12} FAILED")
+                continue
+            src_notices, lossy = problems.take(src)
+            notices.extend(src_notices)
+            all_items.extend(items)
+            if lossy:
+                # Part of this source's window is missing; keep its last-run timestamp so the
+                # next run covers the same window again instead of losing that data for good.
+                notices.append(f"{src}: result is incomplete, last-run time not advanced -- the next run retries this window")
+                print(f"  {src:<12} {len(items):>3} item(s)  (INCOMPLETE)")
+            else:
+                print(f"  {src:<12} {len(items):>3} item(s)")
+                fetched_sources.append(src)
 
     t_fetch_end = time.monotonic()
 
     if not all_items:
+        if notices:
+            # Nothing to mail, but silently exiting 0 would hide that the run was broken.
+            _print_notices(notices)
+            raise RuntimeError(
+                "No items fetched and errors occurred, so 'nothing new' cannot be trusted:\n  - "
+                + "\n  - ".join(notices)
+            )
         print(f"Nothing new since last run. ({t_fetch_end - t_fetch_start:.1f}s)")
         return
 
@@ -570,9 +677,21 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
 
     t_del_end = time.monotonic()
 
+    if not sent:
+        _print_notices(notices)
+        if summarized:
+            raise RuntimeError(
+                "Digest could not be delivered (see the 'Failed to send' error above); "
+                "state was not updated, so the next run covers the same items again."
+            )
+        if notices:
+            raise RuntimeError("Nothing could be reported and errors occurred:\n  - " + "\n  - ".join(notices))
+        print("Nothing to report after summarizing (all changes were cosmetic).")
+        return
+
     # Update state only on real sends. Note: send_digest returns True even on dry-run,
     # so the `not args.dry_run` guard is what prevents state update in that case.
-    if sent and not args.dry_run:
+    if not args.dry_run:
         now = datetime.now(timezone.utc)
         new_state: Dict[str, datetime] = dict(state)
         for src in fetched_sources:
@@ -587,6 +706,7 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
         len(summarized),
     )
     _print_model_stats(model_stats)
+    _print_notices(notices)
 
 
 if __name__ == "__main__":

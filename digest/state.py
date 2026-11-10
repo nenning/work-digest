@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
+from digest import problems
+
 # Default "never run" timestamp returned for unknown sources
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -48,8 +50,15 @@ def load_state(state_file: Path) -> Dict[str, datetime]:
             k: datetime.fromisoformat(v["last_run"]).astimezone(timezone.utc)
             for k, v in data.items()
         }
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return {}  # treat corrupt state as no prior runs
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        # Treated as "never run", so the next digest covers all time -- say so loudly.
+        problems.report(
+            "state",
+            f"State file {state_file} is unreadable ({exc.__class__.__name__}: {exc}); "
+            "treating every source as never run, so this digest covers all time",
+            lossy=False,
+        )
+        return {}
 
 
 def save_state(state_file: Path, timestamps: Dict[str, datetime]) -> None:

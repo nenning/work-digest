@@ -197,7 +197,7 @@ def test_fetch_sprints_dedupes_repeated_sprint():
 
 
 def test_fetch_sprints_unknown_sprint_raises():
-    mock_get = MagicMock(return_value=_sprint_resp([{"id": 1, "name": "Sprint 1"}]))
+    mock_get = MagicMock(return_value=_sprint_resp([{"id": 1, "name": "Sprint 1", "startDate": "2026-05-01T00:00:00Z", "endDate": "2026-05-14T00:00:00Z"}]))
     with patch("digest.sources.mgmt_jira.requests.get", mock_get):
         with pytest.raises(ValueError, match="'999' not found"):
             fetch_sprints(make_atlassian_config(), AUTH, 1, ["Sprint 1", "999"])
@@ -537,3 +537,10 @@ def test_extract_text_list():
 def test_extract_text_empty():
     assert _extract_text({}) == ""
     assert _extract_text([]) == ""
+
+
+def test_fetch_sprint_without_dates_raises_instead_of_using_now():
+    sprint = {"id": 5, "name": "Future", "state": "future"}
+    with patch("digest.sources.mgmt_jira.requests.get", return_value=_sprint_resp([sprint])):
+        with pytest.raises(ValueError, match="no start/end date"):
+            fetch_sprint(make_atlassian_config(), AUTH, 1, "Future")

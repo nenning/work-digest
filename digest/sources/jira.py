@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 from markupsafe import Markup
+from digest import problems
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
 
@@ -55,8 +56,9 @@ def _fetch_issue_summary(config: AtlassianConfig, auth_header: str, key: str, ca
         if resp.ok:
             cache[key] = resp.json()["fields"]["summary"]
             return cache[key]
-    except Exception:
-        pass
+        problems.report("jira", f"Could not look up summary of {key} (HTTP {resp.status_code}); shown as bare key", lossy=False)
+    except Exception as exc:
+        problems.report("jira", f"Could not look up summary of {key}: {exc}; shown as bare key", lossy=False)
     cache[key] = None
     return None
 
@@ -77,7 +79,8 @@ def _fetch_remote_links(config: AtlassianConfig, auth_header: str, key: str) -> 
         )
         resp.raise_for_status()
         return resp.json()
-    except Exception:
+    except Exception as exc:
+        problems.report("jira", f"Could not fetch remote links of {key}: {exc}; links shown as plain text", lossy=False)
         return []
 
 
@@ -223,12 +226,15 @@ def _fetch_ticket_updates(
             return deduped
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(issues), 8)) as executor:
-            futures = [executor.submit(_fetch_one, issue) for issue in issues]
+            futures = {executor.submit(_fetch_one, issue): issue for issue in issues}
             for future in concurrent.futures.as_completed(futures):
                 try:
                     items.extend(future.result())
                 except Exception as exc:
-                    log.warning("Failed to fetch Jira issue update: %s", exc)
+                    problems.report(
+                        "jira",
+                        f"Updates of {futures[future].get('key', '?')} could not be fetched ({exc.__class__.__name__}: {exc})",
+                    )
 
     return items
 
@@ -393,7 +399,7 @@ def _net_field_change(changes: list[dict]) -> tuple[str | None, str | None]:
     Multi-value fields (e.g. fixVersions) log a value swap as two separate items in the same
     history: a removal (toString empty) and an addition (fromString empty). Left unpaired, a
     chronological merge across histories can pick up a stray removal fragment as the "final"
-    state instead of the value actually left in place (see EGOV-595: repeated Fix Version swaps
+    state instead of the value actually left in place (see PROJ-595: repeated Fix Version swaps
     ending back at the original value showed as "PI 3 → —").
     """
     if len(changes) == 1:

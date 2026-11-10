@@ -9,13 +9,8 @@ from digest.models import SourceItem, SummarizedItem
 from digest.summarizer import synthesize_mgmt_summary
 
 
-def _openai_config(fallback_models=None) -> LLMConfig:
-    return LLMConfig(
-        provider="openai",
-        api_key="sk-test",
-        models=["gpt-4o"],
-        fallback_models=fallback_models or [],
-    )
+def _openai_config() -> LLMConfig:
+    return LLMConfig(provider="openai", api_key="sk-test", models=["gpt-4o"])
 
 
 def _make_jira_item(kind="ticket_done", title="TEAM-1: Do the thing",
@@ -176,7 +171,7 @@ def test_synthesize_empty_inputs_still_calls_llm():
     mock_client.chat.completions.create.assert_called_once()
 
 
-def test_synthesize_fallback_model_used_when_primary_fails():
+def test_synthesize_next_model_used_when_primary_fails():
     mock_client = _mock_openai_client("Fallback result.")
     call_count = 0
 
@@ -189,7 +184,7 @@ def test_synthesize_fallback_model_used_when_primary_fails():
 
     mock_client.chat.completions.create.side_effect = _create
 
-    cfg = LLMConfig(provider="openai", api_key="sk-test", models=["gpt-4o"], fallback_models=["gpt-3.5-turbo"])
+    cfg = LLMConfig(provider="openai", api_key="sk-test", models=["gpt-4o", "gpt-3.5-turbo"])
     with patch("digest.summarizer.openai") as mock_openai:
         mock_openai.OpenAI.return_value = mock_client
         result = synthesize_mgmt_summary([], [], cfg, label="Sprint 7")

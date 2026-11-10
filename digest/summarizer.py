@@ -13,6 +13,7 @@ import anthropic
 import openai
 from markupsafe import Markup
 
+from digest import problems, usage
 from digest.config import LLMConfig
 from digest.models import SourceItem, SummarizedItem
 
@@ -217,6 +218,7 @@ def _call_openai(prompt: str, config: LLMConfig, model: str, timeout: float, jso
         create_kwargs["response_format"] = {"type": "json_object"}
 
     response = client.chat.completions.create(**create_kwargs)
+    usage.note_tokens(getattr(response.usage, "prompt_tokens", None), getattr(response.usage, "completion_tokens", None))
     if not response.choices:
         raise ValueError("LLM returned empty choices list")
     return response.choices[0].message.content
@@ -233,6 +235,7 @@ def _call_anthropic(prompt: str, config: LLMConfig, model: str, timeout: float, 
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
+    usage.note_tokens(getattr(response.usage, "input_tokens", None), getattr(response.usage, "output_tokens", None))
     if not response.content:
         raise ValueError("Anthropic returned empty content list")
     return response.content[0].text
@@ -241,7 +244,7 @@ def _call_anthropic(prompt: str, config: LLMConfig, model: str, timeout: float, 
 def _models_to_try(assigned: str, config: LLMConfig) -> List[str]:
     seen: set = set()
     order: List[str] = []
-    for m in [assigned] + config.models + config.fallback_models:
+    for m in [assigned] + config.models:
         if m not in seen:
             seen.add(m)
             order.append(m)
@@ -290,10 +293,14 @@ def _parse_response(raw: str, item: SourceItem):
     try:
         data = json.loads(_strip_code_fence(raw))
         if not isinstance(data, dict):
+            problems.report("llm", f"Unexpected LLM reply shape for '{item.title[:60]}'; showing raw text", lossy=False)
             return raw, item.priority
         summary = data.get("summary", raw)
         if summary is None:
             return _SKIP, None
+        if not isinstance(summary, str) or not summary.strip():
+            problems.report("llm", f"LLM returned an empty or non-text summary for '{item.title[:60]}'", lossy=False)
+            return "[LLM returned no usable summary]", item.priority
         if item.source == "outlook":
             raw_priority = data.get("priority", item.priority)
             priority = raw_priority if raw_priority in VALID_PRIORITIES else item.priority
@@ -303,14 +310,14 @@ def _parse_response(raw: str, item: SourceItem):
     except json.JSONDecodeError:
         salvaged = _salvage_summary(_strip_code_fence(raw))
         if salvaged is not None:
-            log.warning("LLM returned invalid JSON; salvaged summary via regex fallback")
+            problems.report("llm", f"LLM returned invalid JSON for '{item.title[:60]}'; summary salvaged via regex", lossy=False)
             summary, raw_priority = salvaged
             if item.source == "outlook":
                 priority = raw_priority if raw_priority in VALID_PRIORITIES else item.priority
             else:
                 priority = item.priority
             return summary, priority
-        log.warning("LLM returned invalid JSON and summary could not be salvaged; showing raw text")
+        problems.report("llm", f"LLM returned invalid JSON for '{item.title[:60]}' and it could not be salvaged; showing raw text", lossy=False)
         return raw, item.priority
 
 
@@ -468,7 +475,7 @@ def summarize_items(
 
     - Jira new_ticket items are formatted directly without LLM.
     - Confluence page updates use a diff-aware prompt; null summary → item skipped.
-    - LLM failures fall back to fallback_model if configured; both failing → notice added.
+    - LLM failures fall back to the other configured models; all failing → notice added.
     - notices: optional list to append infrastructure error messages to.
     """
     if notices is None:
@@ -542,6 +549,8 @@ def summarize_items(
     if model_stats is not None:
         model_stats["times"] = model_times
         model_stats["errors"] = model_errors
+
+    notices.extend(problems.take("llm")[0])
 
     # Detect endpoint-down: >50% of items that called the LLM had all models fail.
     llm_attempted = len(llm_items)
@@ -687,7 +696,7 @@ def synthesize_mgmt_summary(
     _SYNTHESIS_TIMEOUT = max(config.llm_timeout * 3, 90)
 
     errors: list = []
-    for model in config.models + config.fallback_models:
+    for model in config.models:
         try:
             log.info("Synthesizing management summary with model %s...", model)
             if config.provider in ("openai", "azure_openai"):

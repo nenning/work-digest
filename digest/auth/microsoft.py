@@ -1,7 +1,10 @@
+import logging
 import os
 import sys
 import msal
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 SCOPES = [
@@ -25,7 +28,8 @@ def get_token(tenant_id: str, cache_file: Path, client_id: str | None = None) ->
     if cache_file.exists():
         try:
             cache.deserialize(cache_file.read_text())
-        except Exception:
+        except Exception as exc:
+            log.warning("M365 token cache %s is unreadable (%s); discarding it, re-authentication needed", cache_file, exc)
             cache_file.unlink(missing_ok=True)  # evict corrupt cache, proceed fresh
 
     app = msal.PublicClientApplication(
@@ -42,11 +46,15 @@ def get_token(tenant_id: str, cache_file: Path, client_id: str | None = None) ->
             _save_cache(cache, cache_file)
             return result["access_token"]
         # Silent refresh failed (token revoked, policy change, etc.) — fall through to device flow
+        reason = (result or {}).get("error_description") or (result or {}).get("error") or "no token returned"
+        log.warning("Silent M365 token refresh failed: %s", reason)
+    else:
+        reason = "no cached account"
 
     if not sys.stdin.isatty():
         raise RuntimeError(
-            "M365 token has expired and cannot be refreshed in a non-interactive session. "
-            "Run 'python main.py --setup-auth' manually to refresh your credentials."
+            f"M365 token is missing or expired ({reason}) and cannot be refreshed in a non-interactive "
+            "session. Run 'python digest/main.py --setup-auth' manually to refresh your credentials."
         )
 
     flow = app.initiate_device_flow(scopes=SCOPES)

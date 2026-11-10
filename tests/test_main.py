@@ -58,7 +58,7 @@ def _make_config(tmp_path: Path, smtp: bool = False):
     cfg.atlassian.projects = []
     cfg.llm.provider = "openai"
     cfg.llm.api_key = "key"
-    cfg.llm.model = "gpt-4o-mini"
+    cfg.llm.models = ["gpt-4o-mini"]
     cfg.llm.endpoint = None
     cfg.email.subject_prefix = "[Digest]"
     cfg.email.recipient = "user@example.com"
@@ -499,3 +499,180 @@ def test_setup_smtp_auth_requires_smtp_config(tmp_path, monkeypatch):
     ):
         from digest.main import main
         main()
+
+
+def test_spec_monitor_and_mgmt_summary_are_mutually_exclusive(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--spec-monitor", "--mgmt-summary"])
+    with patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)):
+        from digest.main import main
+        with pytest.raises(SystemExit):
+            main()
+
+
+def test_spec_flag_requires_spec_monitor(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--spec", "API X"])
+    with patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)):
+        from digest.main import main
+        with pytest.raises(SystemExit):
+            main()
+
+
+def test_spec_monitor_dispatches_to_cli(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--spec-monitor", "--dry-run", "--spec", "API X"])
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.resolve_atlassian_config", side_effect=lambda a: a),
+        patch("digest.spec_monitor.cli.run_cli") as run_cli,
+    ):
+        from digest.main import main
+        main()
+    assert run_cli.call_args[0][0].spec == "API X"
+
+
+def _run_main(monkeypatch, tmp_path, *argv):
+    monkeypatch.setattr(sys, "argv", ["main.py", *argv])
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.resolve_atlassian_config", side_effect=lambda a: a),
+        patch("digest.spec_monitor.cli.dispatch") as dispatch,
+    ):
+        from digest.main import main
+        main()
+    return dispatch
+
+
+@pytest.mark.parametrize("argv", [
+    ["--all-states"],
+    ["--apply"],
+    ["--spec-monitor", "--apply"],
+    ["--create-ticket", "X", "--apply"],
+    ["--create-ticket", "X", "--update-spec", "Y"],
+    ["--spec-monitor", "--create-ticket", "X"],
+    ["--create-ticket", "X", "--mgmt-summary", "--since", "7d"],
+    ["--create-ticket", "X", "--all-states"],
+])
+def test_spec_flag_combinations_are_rejected(tmp_path, monkeypatch, argv):
+    with pytest.raises(SystemExit):
+        _run_main(monkeypatch, tmp_path, *argv)
+
+
+@pytest.mark.parametrize("argv", [
+    ["--spec-monitor", "--all-states", "--dry-run"],
+    ["--create-ticket", "API X", "--dry-run"],
+    ["--update-spec", "API X"],
+    ["--update-spec", "API X", "--dry-run"],
+])
+def test_valid_spec_flag_combinations_dispatch(tmp_path, monkeypatch, argv):
+    dispatch = _run_main(monkeypatch, tmp_path, *argv)
+    dispatch.assert_called_once()
+
+
+@pytest.mark.parametrize("argv,expected", [
+    (["--update-spec"], "*"),
+    (["--update-spec", "--dry-run"], "*"),
+    (["--update-spec", "--all-states"], "*"),
+    (["--update-spec", "678297650"], "678297650"),
+    (["--update-spec", "https://x.atlassian.net/wiki/spaces/R/pages/678297650/API"], "https://x.atlassian.net/wiki/spaces/R/pages/678297650/API"),
+])
+def test_update_spec_value_is_optional(tmp_path, monkeypatch, argv, expected):
+    monkeypatch.setattr(sys, "argv", ["main.py", *argv])
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.resolve_atlassian_config", side_effect=lambda a: a),
+        patch("digest.spec_monitor.cli.dispatch") as dispatch,
+    ):
+        from digest.main import main
+        main()
+    assert dispatch.call_args[0][0].update_spec == expected
+
+
+# ---------------------------------------------------------------------------
+# Error visibility: failures must never end as a silent "success"
+# ---------------------------------------------------------------------------
+
+def _run_main_jira(tmp_path, monkeypatch, fetch, send_result=True, extra_args=()):
+    from digest.models import SummarizedItem
+    ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+    fake_sum = SummarizedItem(source="jira", kind="comment", title="T", url="https://x.com",
+                              summary="s", author="A", timestamp=ts)
+    monkeypatch.setattr(sys, "argv", ["main.py", "--source", "jira", *extra_args])
+    mock_save = MagicMock()
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.save_state", mock_save),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.jira.fetch", side_effect=fetch),
+        patch("digest.main.summarize_items", return_value=[fake_sum]),
+        patch("digest.main.send_via_smtp", return_value=send_result),
+    ):
+        from digest.main import main
+        main()
+    return mock_save
+
+
+def _item():
+    return SourceItem(source="jira", kind="comment", title="T", url="https://x.com",
+                      content="x", author="A", timestamp=datetime(2026, 4, 9, tzinfo=timezone.utc))
+
+
+def test_failed_send_is_an_error_and_state_not_saved(tmp_path, monkeypatch):
+    with pytest.raises(RuntimeError, match="could not be delivered"):
+        _run_main_jira(tmp_path, monkeypatch, lambda *a: [_item()], send_result=False)
+
+
+def test_all_sources_failing_is_an_error_not_nothing_new(tmp_path, monkeypatch):
+    def boom(*a):
+        raise ConnectionError("jira down")
+    with pytest.raises(RuntimeError, match="jira down"):
+        _run_main_jira(tmp_path, monkeypatch, boom)
+
+
+def test_partial_source_failure_does_not_advance_state(tmp_path, monkeypatch):
+    from digest import problems
+
+    def partial(*a):
+        problems.report("jira", "Updates of PROJ-1 could not be fetched")
+        return [_item()]
+
+    mock_save = _run_main_jira(tmp_path, monkeypatch, partial)
+    mock_save.assert_called_once()
+    assert "jira" not in mock_save.call_args.args[1]
+
+
+def test_complete_source_advances_state(tmp_path, monkeypatch):
+    mock_save = _run_main_jira(tmp_path, monkeypatch, lambda *a: [_item()])
+    assert "jira" in mock_save.call_args.args[1]
+
+
+def test_endpoint_down_gives_up_after_bounded_retries(tmp_path, monkeypatch):
+    from digest.summarizer import LLMEndpointError
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main._run", side_effect=LLMEndpointError("down")) as run,
+        patch("digest.main.time.sleep"),
+    ):
+        from digest.main import main
+        with pytest.raises(RuntimeError, match="gave up"):
+            main()
+    assert run.call_count == 3
+
+
+def test_mgmt_failed_send_and_confluence_notice(tmp_path, monkeypatch):
+    project = ProjectConfig(name="P", jira=ProjectJiraConfig(project="PROJ"),
+                            mgmt_summary=ProjectMgmtSummaryConfig(jira_board_id=1))
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    with (
+        patch("digest.main.load_config", return_value=_make_mgmt_config(tmp_path, [project])),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=([_make_ticket()], {"a1"})),
+        patch("digest.main.fetch_team_pages", side_effect=ConnectionError("wiki down")),
+        patch("digest.main.synthesize_mgmt_summary", return_value="ok"),
+        patch("digest.main.send_mgmt_summary_via_smtp", return_value=False) as send,
+    ):
+        from digest.main import main
+        with pytest.raises(RuntimeError, match="could not be delivered"):
+            main()
+    assert any("wiki down" in n for n in send.call_args.kwargs["notices"])

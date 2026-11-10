@@ -326,6 +326,37 @@ def send_mgmt_summary_via_smtp(
     return _smtp_send(smtp_cfg, recipient, subject, html_body, m365_token)
 
 
+def send_html_via_smtp(
+    subject: str, html_body: str, smtp_cfg: SmtpConfig, recipient: str, m365_token: Optional[str] = None,
+) -> bool:
+    """Send an already rendered HTML mail (used by modes that render their own template)."""
+    return _smtp_send(smtp_cfg, recipient, subject, html_body, m365_token)
+
+
+def send_html_via_com(subject: str, html_body: str, recipient: str, display_only: bool = False) -> bool:
+    try:
+        import win32com.client
+    except ImportError:
+        log.error("pywin32 is not installed — cannot send via Outlook COM. Run: pip install pywin32")
+        return False
+
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        mail = outlook.CreateItem(0)
+        mail.To = recipient
+        mail.Subject = subject
+        mail.HTMLBody = html_body
+        if display_only:
+            mail.Display()
+        else:
+            mail.Send()
+    except Exception as exc:
+        log.error("Failed to send mail via Outlook COM: %s", exc)
+        return False
+
+    return True
+
+
 def send_via_com(
     items: List[SummarizedItem],
     config: EmailConfig,

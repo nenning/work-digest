@@ -54,6 +54,15 @@ Per project:
   issue search plus the raw JQL for pasting into Confluence. With
   `--assume-done` it is a single query containing all tickets.
 
+## LLM models and timeouts
+
+All LLM calls of this mode use `llm.heavy_models` (optional, defaults to
+`llm.summary_models`); with several models the others are the failover for a failing
+call — there are no separate fallback models. `synthesize_mgmt_summary()` is a single
+large narrative call with its own timeout, `max(llm_timeout * 3, 90)`: it originally had
+none, and reusing the small per-item `config.llm_timeout` risked spurious failures on a
+legitimately slower large generation.
+
 ## `digest/sources/mgmt_jira.py`
 
 `resolve_project_mgmt_config()` builds the per-project effective

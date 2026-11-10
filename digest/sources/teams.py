@@ -5,6 +5,7 @@ import re
 import requests
 from datetime import datetime, timezone
 from typing import List
+from digest import problems
 from digest.models import SourceItem
 
 log = logging.getLogger(__name__)
@@ -67,12 +68,16 @@ def _fetch_channel_messages(headers: dict, since: datetime) -> List[SourceItem]:
 
     items: List[SourceItem] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(teams), 8)) as executor:
-        futures = [executor.submit(_fetch_team, team) for team in teams]
+        futures = {executor.submit(_fetch_team, team): team for team in teams}
         for future in concurrent.futures.as_completed(futures):
             try:
                 items.extend(future.result())
             except Exception as exc:
-                log.warning("Failed to fetch team messages: %s", exc)
+                problems.report(
+                    "teams",
+                    f"Messages of team '{futures[future].get('displayName', '?')}' could not be fetched "
+                    f"({exc.__class__.__name__}: {exc})",
+                )
     return items
 
 
@@ -106,12 +111,16 @@ def _fetch_chat_messages(headers: dict, since: datetime) -> List[SourceItem]:
 
     items: List[SourceItem] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(chats), 8)) as executor:
-        futures = [executor.submit(_fetch_chat, chat) for chat in chats]
+        futures = {executor.submit(_fetch_chat, chat): chat for chat in chats}
         for future in concurrent.futures.as_completed(futures):
             try:
                 items.extend(future.result())
             except Exception as exc:
-                log.warning("Failed to fetch chat messages: %s", exc)
+                problems.report(
+                    "teams",
+                    f"Messages of chat '{_chat_label(futures[future])}' could not be fetched "
+                    f"({exc.__class__.__name__}: {exc})",
+                )
     return items
 
 
