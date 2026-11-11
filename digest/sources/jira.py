@@ -25,7 +25,11 @@ _IGNORED_FIELDS = _load_field_ignore()
 
 _JIRA_KEY_RE = re.compile(r'\b([A-Z][A-Z0-9]+-\d+)\b')
 
-_BLOCKING_OUTWARD_PHRASES = {"blocks", "has to be done before"}
+# Only these changelog fields hold issue keys; elsewhere (Sprint "HC PI-1.S02", Fix Version) a key-shaped
+# substring is just a name and a lookup would 404 or append an unrelated ticket's title.
+_ISSUE_REF_FIELDS = {"link", "issueparentassociation", "parent", "epic link", "parent link", "epic child"}
+
+_BLOCKING_OUTWARD_PHRASES ={"blocks", "has to be done before"}
 
 _REMOTE_LINK_FIELDS = {"remoteworkitemlink", "remoteissuelink"}
 _REMOTE_LINK_RE = re.compile(r'links to "([^"]+)"')
@@ -350,8 +354,10 @@ def _collect_candidates(
             remote_links = None
             enriched = []
             for c in net_changes:
-                new_from = _enrich_keys(c["from"], config, auth_header, summary_cache)
-                new_to = _enrich_keys(c["to"], config, auth_header, summary_cache)
+                new_from, new_to = c["from"], c["to"]
+                if c["field"].lower() in _ISSUE_REF_FIELDS:
+                    new_from = _enrich_keys(new_from, config, auth_header, summary_cache)
+                    new_to = _enrich_keys(new_to, config, auth_header, summary_cache)
                 if c["field"].lower() in _REMOTE_LINK_FIELDS:
                     if remote_links is None:
                         remote_links = _fetch_remote_links(config, auth_header, issue["key"])

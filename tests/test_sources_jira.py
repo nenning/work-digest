@@ -697,6 +697,48 @@ def test_issue_parent_association_field_change_includes_summary():
     assert "PROJ-9 (New parent)" in changes[0].content
 
 
+def test_key_like_text_in_non_reference_field_is_not_looked_up():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:00:00Z",
+        "author": {"displayName": "Anna"},
+        "items": [
+            {"field": "Sprint", "fromString": None, "toString": "HC PI-1.S02"},
+            {"field": "Fix Version", "fromString": None, "toString": "REL-2 hotfix"},
+        ],
+    }]
+    mock_get, mock_post = _make_enrichment_mocks(issue, {"PI-1": "Should not be used", "REL-2": "Nor this"})
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    changes = [i for i in items if i.kind == "field_change"]
+    assert len(changes) == 1
+    assert "Sprint: — → HC PI-1.S02" in changes[0].content
+    assert "REL-2 hotfix" in changes[0].content
+    assert "Should not be used" not in changes[0].content
+    assert "Nor this" not in changes[0].content
+    looked_up = [c.args[0] for c in mock_get.call_args_list]
+    assert not any("/issue/PI-1" in u or "/issue/REL-2" in u for u in looked_up)
+
+
+def test_parent_field_change_includes_summary():
+    issue = copy.deepcopy(ISSUE_BASE)
+    issue["changelog"]["histories"] = [{
+        "created": "2026-04-09T08:00:00Z",
+        "author": {"displayName": "Anna"},
+        "items": [{"field": "Parent", "fromString": None, "toString": "PROJ-9"}],
+    }]
+    mock_get, mock_post = _make_enrichment_mocks(issue, {"PROJ-9": "New parent"})
+    with patch("digest.sources.jira.requests.get", mock_get), \
+         patch("digest.sources.jira.requests.post", mock_post):
+        items = fetch(make_config(), "Basic xxx", SINCE)
+
+    changes = [i for i in items if i.kind == "field_change"]
+    assert len(changes) == 1
+    assert "PROJ-9 (New parent)" in changes[0].content
+
+
 def _remote_link_issue(quoted_title):
     issue = copy.deepcopy(ISSUE_BASE)
     issue["changelog"]["histories"] = [{
