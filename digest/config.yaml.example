@@ -126,6 +126,10 @@ data_dir: ~/.digest
 #     attempts: 3
 #     backoff_seconds: 2                 # doubled per attempt; Retry-After honoured on 429
 #     timeout_seconds: 60                # per HTTP request; downloads get twice this
+#   reference_check:                     # only for --check-references
+#     link_depth: 1                      # follow the links of the pages listed in Quellen this many levels and suggest
+#                                        # linked pages the spec should list too (0 = off, max 2); --link-depth overrides
+#     max_pages: 50                      # upper bound of pages read per spec for that (the run says when it is hit)
 #   confluence_page:
 #     parent_page_id: "..."              # where --publish-page creates the report page; required only for that flag
 #   ticket:                              # only needed for --create-ticket

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ L.title }}</title>
+  <style>
+    body {
+      margin: 0; padding: 0;
+      background: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      color: #1e293b;
+    }
+    .card {
+      max-width: 1200px; margin: 0 auto; text-align: left;
+      background: #ffffff;
+      border-radius: 10px; overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+    .header { background: #1e293b; color: #f8fafc; padding: 22px 28px; }
+    .header h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+    .header-range { margin: 6px 0 0; font-size: 12px; color: #94a3b8; }
+    .block { padding: 20px 28px; border-bottom: 1px solid #e2e8f0; overflow-wrap: anywhere; word-break: break-word; }
+    .block h2 { margin: 0 0 12px; font-size: 16px; font-weight: 700; color: #0f172a; }
+    .block.spec { border-top: 12px solid #cbd5e1; padding-top: 28px; padding-bottom: 28px; }
+    .block.spec h2 { font-size: 18px; }
+    .block h3 {
+      margin: 18px 0 8px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .08em; color: #64748b;
+    }
+    .block a { color: #1d4ed8; text-decoration: underline; }
+    .toc { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7; }
+    .problem-banner {
+      background: #fef2f2; border-left: 4px solid #dc2626; color: #991b1b;
+      border-radius: 4px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; font-weight: 600;
+    }
+    .lst { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+    .meta { font-size: 12px; color: #64748b; margin: 0 0 12px; }
+    table.t { width: 100%; max-width: 100%; border-collapse: collapse; font-size: 12px; }
+    table.t th {
+      text-align: left; background: #f8fafc; color: #475569; font-weight: 600;
+      padding: 6px 8px; border-bottom: 2px solid #e2e8f0;
+    }
+    table.t td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+    .detail { display: block; color: #475569; font-weight: 400; margin-top: 2px; }
+    .quote { color: #334155; font-style: italic; }
+    .warn {
+      background: #fff7ed; border-left: 4px solid #f97316; border-radius: 4px;
+      padding: 8px 12px; margin: 0 0 8px; font-size: 13px; color: #9a3412;
+    }
+    .footer { padding: 16px 28px; text-align: left; font-size: 12px; color: #94a3b8; }
+    .cmdline {
+      margin: 8px 0 0; font-family: "Courier New", Courier, monospace;
+      font-size: 10px; color: #94a3b8; word-break: break-all;
+    }
+    @media (max-width: 600px) {
+      .header, .block, .footer { padding-left: 16px; padding-right: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f1f5f9; padding:24px 0;">
+    <tr><td align="center" style="padding:0 24px;">
+      <div class="card">
+
+        <div class="header">
+          <h1>{{ L.title }}</h1>
+          <p class="header-range">{{ L.generated }}: {{ generated }}</p>
+        </div>
+
+        <div class="block" id="toc">
+          <h2>{{ L.toc }}</h2>
+          <ol class="toc">
+            {% for anchor, label in toc %}<li><a href="#{{ anchor }}">{{ label }}</a></li>{% endfor %}
+          </ol>
+        </div>
+
+        <div class="block" id="overview">
+          <h2>{{ L.overview }}</h2>
+          {% if problem_count %}
+          <div class="problem-banner">{{ problem_count }} {{ L.problems }} <a href="#errors">{{ L.errors }}</a></div>
+          {% endif %}
+          <p class="meta">{{ L.intro }}</p>
+
+          <h3>{{ L.with_missing }} ({{ with_missing|length }})</h3>
+          {% if with_missing %}<ul class="lst">
+            {% for s in with_missing %}<li><a href="#{{ s.anchor }}">{{ s.title }}</a>{% if s.url %} (<a href="{{ s.url }}" target="_blank" rel="noopener">Confluence</a>){% endif %}, {{ s.n }}</li>{% endfor %}
+          </ul>{% else %}<p class="meta">{{ L.none }}</p>{% endif %}
+
+          <h3>{{ L.with_suggested }} ({{ with_suggested|length }})</h3>
+          {% if with_suggested %}<ul class="lst">
+            {% for s in with_suggested %}<li><a href="#{{ s.anchor }}">{{ s.title }}</a>{% if s.url %} (<a href="{{ s.url }}" target="_blank" rel="noopener">Confluence</a>){% endif %}, {{ s.n }}</li>{% endfor %}
+          </ul>{% else %}<p class="meta">{{ L.none }}</p>{% endif %}
+
+          <h3>{{ L.without_missing }} ({{ without_missing|length }})</h3>
+          {% if without_missing %}<ul class="lst">
+            {% for s in without_missing %}<li>{% if s.url %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title }}</a>{% else %}{{ s.title }}{% endif %}</li>{% endfor %}
+          </ul>{% else %}<p class="meta">{{ L.none }}</p>{% endif %}
+
+          <h3>{{ L.excluded_pages }} ({{ excluded|length }})</h3>
+          {% if excluded %}<ul class="lst">
+            {% for e in excluded %}<li>{{ e.title }} ({{ e.id }})</li>{% endfor %}
+          </ul>{% else %}<p class="meta">{{ L.none }}</p>{% endif %}
+        </div>
+
+        {% for sp in specs %}
+        <div class="block spec" id="{{ sp.anchor }}">
+          <h2>{{ sp.title }}</h2>
+          <p class="meta">
+            {{ L.status }}: {{ sp.status }}
+            {% if sp.jira %} &middot; {{ L.jira }}: {{ sp.jira|join(', ') }}{% endif %}
+            &middot; {{ L.listed }}: {{ sp.listed }}
+            {% if sp.url %} &middot; <a href="{{ sp.url }}" target="_blank" rel="noopener">Confluence</a>{% endif %}
+          </p>
+
+          {% for w in sp.warnings %}<div class="warn">{{ w|linkify }}</div>{% endfor %}
+          {% if sp.llm_incomplete %}<div class="warn">{{ L.llm_incomplete }}</div>{% endif %}
+
+          {% if sp.rows %}
+          <table class="t" width="100%" cellpadding="0" cellspacing="0">
+            <tr><th>{{ L.reference }}</th><th>{{ L.kind }}</th><th>{{ L.section }}</th><th>{{ L.mention }}</th><th>{{ L.found_by }}</th></tr>
+            {% for r in sp.rows %}
+            <tr>
+              <td>{% if r.url %}<a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.reference }}</a>{% else %}{{ r.reference }}{% endif %}{% if r.why %}<span class="detail">{{ r.why }}</span>{% endif %}</td>
+              <td>{{ r.kind }}</td>
+              <td>{{ r.section }}</td>
+              <td class="quote">{{ r.mention|linkify }}</td>
+              <td>{{ r.origin }}</td>
+            </tr>
+            {% endfor %}
+          </table>
+          {% else %}<p class="meta">{{ L.no_missing }}</p>{% endif %}
+
+          {% if sp.link_stats %}
+          <h3>{{ L.suggested }}</h3>
+          {% if sp.link_incomplete %}<div class="warn">{{ L.link_incomplete }}</div>{% endif %}
+          <p class="meta">{{ L.suggested_intro }} {{ sp.link_stats }}</p>
+          {% if sp.suggested %}
+          <table class="t" width="100%" cellpadding="0" cellspacing="0">
+            <tr><th>{{ L.page }}</th><th>{{ L.linked_from }}</th><th>{{ L.link_mention }}</th><th>{{ L.confidence }}</th></tr>
+            {% for s in sp.suggested %}
+            <tr>
+              <td>{% if s.url %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title }}</a>{% else %}{{ s.title }}{% endif %}{% if s.reason %}<span class="detail">{{ s.reason }}</span>{% endif %}</td>
+              <td>{{ s.linked_from|join('; ') }}</td>
+              <td class="quote">{{ s.mention|linkify }}</td>
+              <td>{{ s.confidence }}</td>
+            </tr>
+            {% endfor %}
+          </table>
+          {% endif %}
+          {% if sp.rejected %}
+          <p class="meta">{{ L.link_rejected }}:
+            {% for r in sp.rejected %}{% if r.url %}<a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.text }}</a>{% else %}{{ r.text }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}
+          </p>
+          {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+
+        <div class="block" id="errors">
+          <h2>{{ L.errors }}</h2>
+          {% if errors %}
+          <table class="t" width="100%" cellpadding="0" cellspacing="0">
+            <tr><th>{{ L.err_scope }}</th><th>{{ L.err_message }}</th><th>{{ L.err_attempts }}</th><th>{{ L.err_impact }}</th></tr>
+            {% for e in errors %}
+            <tr><td>{{ e.scope|linkify }}</td><td>{{ e.message|linkify }}</td><td>{{ e.attempts }}</td><td>{{ e.impact|linkify }}</td></tr>
+            {% endfor %}
+          </table>
+          {% else %}<p class="meta">{{ L.no_errors }}</p>{% endif %}
+        </div>
+
+        <div class="footer">
+          {{ L.ai_note }} &middot; {{ L.footer_cache }}: {{ report.cache_hits }} / {{ report.cache_misses }}
+          {% if report.command_line %}<div class="cmdline">{{ L.footer_cmd }}: {{ report.command_line }}</div>{% endif %}
+        </div>
+
+      </div>
+    </td></tr>
+  </table>
+</body>
+</html>

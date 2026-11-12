@@ -55,6 +55,7 @@ tables as they are today; there is no "already reported" memory.
 | `report.py` | Mail HTML and Confluence storage rendering |
 | `publish.py` | Creates the report page |
 | `runner.py` | Orchestration |
+| `refcheck.py`, `refcheck_links.py`, `refcheck_report.py` | `--check-references`: unlisted-reference detection, link crawl suggesting missing source pages, mail / page rendering |
 
 All monitors share one shape: `handles(ref)` and `resolve(ref, spec)`; `resolve`
 never raises.
@@ -221,6 +222,36 @@ set (the user named the spec explicitly), so the delta is always computed fresh.
   `details` macro id gets `-UPDATE` appended so it is not listed in the
   overview nor discovered as a second spec. `--dry-run` writes the preview
   (`spec-update-<pageid>.diff.txt` / `.storage.html`) and creates nothing.
+- **`--check-references`** (`refcheck.py`, `refcheck_report.py`, `templates/ref_check.html.j2`; used with
+  `--spec-monitor`, never part of the standard run): finds references a spec's text points to that its Quellen
+  table does not list. It replaces the source-change analysis for that run, reads every spec below the parent
+  whatever its status (`analyse_all_states` is forced on) and touches no state, baseline or URL snapshot.
+  Per spec: `parser.parse_sources()` gives the listed sources (excluded rows count as listed);
+  `parser.strip_sources_tables()` removes the table(s) so only the rest of the text is scanned. Two passes:
+  (1) deterministic: ADR and eCH numbers in the text plus Confluence page links and URLs
+  (`parser.body_link_refs()`; the spec itself, its ancestors and Jira `/browse/` links are ignored);
+  (2) the heavy LLM reads the text in parts (like the synthesis) and returns concrete documents not in the
+  table, given the listed sources, the spec's stated gaps and the pattern findings as "already found".
+  A reference counts as listed when any identifier matches: normalised name or title, page id, URL, ADR number
+  (also from a path like `docs/adr/0028-x.md`), eCH number; model findings are additionally dropped when their
+  name contains / is contained in a listed name. A failed LLM pass keeps the pattern findings and is an error
+  row. Report: mail (`ref-check-preview.html` on `--dry-run`), optional `--publish-page`; findings are hints,
+  so only errors give exit code 2. Not covered: references inside draw.io diagrams and images, Jira keys.
+  **Link crawl** (`refcheck_links.py`, after the two passes; `spec_monitor.reference_check.link_depth`, 1 by
+  default, max 2, 0 = off, `--link-depth N` overrides; `max_pages` (50) bounds the pages read per spec):
+  the listed Confluence sources (not excluded rows) are read, their page links (`parser.body_link_refs()`; page
+  ids, short links and titles resolved, links to other hosts ignored) are the depth-1 candidates; depth 2 also
+  reads the links of those pages, also through candidates that were rejected (hub pages). Never candidates: listed
+  pages (same identifiers as above), the spec, its ancestors, pages the text pass already reported. Feasibility
+  check before suggesting: a page with under 100 characters of text is rejected without a model call
+  (`too_short`); the rest goes to the heavy LLM in batches of 8 with the spec text (first 12000 characters, no
+  Quellen table), the listed sources with their "Verwendet für" and a 1500-character excerpt of each candidate,
+  answering relevant / confidence / reason per page. Suggestions carry the chain that led to them
+  (`Quelle A → Seite B` at depth 2) and the sentence with the link; rejected pages stay in the report with their
+  reason. Pages and title lookups are shared by all specs of a run (`PageStore`); verdicts are cached per prompt.
+  An unreadable page is a warning; a failed request, a failed model call or the page budget being hit marks the
+  crawl incomplete (error row / warning), never silently dropping candidates.
+  The `--dry-run` helper scripts are `dryrun-spec-monitor.bat` (no ref check) and `dryrun-spec-refcheck.bat`.
 - **Run statistics** (`digest/usage.py`): every spec-monitor mode (`--spec-monitor`,
   `--create-ticket`, `--update-spec`) prints a block at the end, also when the run fails:
   LLM calls per purpose (`source_summary`, `change_request`, `source_extraction`,

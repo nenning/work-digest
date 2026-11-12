@@ -173,6 +173,68 @@ class SpecAnalysis:
 
 
 @dataclass
+class MissingReference:
+    """Something a spec's text points to that its Quellen table does not list."""
+    reference: str                           # as written, e.g. "ADR-0028", "eCH-0200", a page title
+    kind: str                                # "confluence" | "ech" | "adr" | "url" | "repo" | "other"
+    mention: str = ""                        # the sentence / line that mentions it
+    section: str = ""                        # heading of the section it was found in
+    origin: str = "pattern"                  # "pattern" (deterministic) | "llm"
+    url: Optional[str] = None
+    why: str = ""                            # LLM: why it looks like a source
+
+
+@dataclass
+class SuggestedSource:
+    """A page linked from a listed source (directly or via further pages) that the model judged to be
+    a source the spec should list."""
+    title: str
+    page_id: str
+    url: str
+    linked_from: List[str] = field(default_factory=list)   # "Quelle A" (depth 1) / "Quelle A → Seite B" (depth 2)
+    depth: int = 1
+    mention: str = ""                        # sentence of the linking page that carries the link
+    reason: str = ""                         # LLM: what the spec would use the page for
+    confidence: str = "low"                  # "high" | "medium" | "low"
+
+
+@dataclass
+class RejectedLink:
+    """A linked page that was read but not suggested."""
+    title: str
+    url: str
+    reason: str = ""
+    code: str = "llm"                        # "llm" (model verdict) | "too_short" (page has hardly any text)
+
+
+@dataclass
+class RefCheckResult:
+    spec: SpecInfo
+    listed_count: int = 0                    # sources in the Quellen table (excluded rows included)
+    missing: List[MissingReference] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    errors: List[ReportError] = field(default_factory=list)
+    llm_incomplete: bool = False             # the LLM pass failed: only the pattern findings are shown
+    suggested: List[SuggestedSource] = field(default_factory=list)   # link crawl: pages the spec should list
+    link_rejected: List[RejectedLink] = field(default_factory=list)
+    link_checked: int = 0                    # linked pages read and judged (suggested + rejected)
+    link_depth: int = 0                      # depth the crawl ran with (0 = off)
+    link_incomplete: bool = False            # the crawl or its assessment failed or was cut off
+
+
+@dataclass
+class RefCheckReport:
+    generated_at: datetime
+    results: List[RefCheckResult] = field(default_factory=list)
+    excluded_pages: List[Tuple[str, str]] = field(default_factory=list)  # (page_id, title)
+    errors: List[ReportError] = field(default_factory=list)
+    cache_hits: int = 0
+    cache_misses: int = 0
+    command_line: str = ""
+    language: str = "de"
+
+
+@dataclass
 class RunReport:
     generated_at: datetime
     analysed: List[SpecAnalysis] = field(default_factory=list)

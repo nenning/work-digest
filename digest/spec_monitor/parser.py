@@ -689,6 +689,36 @@ def parse_sources(storage_html: str, *, stand_date: Optional[date], excluded_mar
     return result
 
 
+def strip_sources_tables(storage_html: str) -> str:
+    """The page without its Quellen table(s): what is left is what the spec says outside the source list."""
+    out: List[str] = []
+    pos = 0
+    for start, end, _ in sorted(_find_sources_tables(storage_html)):
+        out.append(storage_html[pos:start])
+        pos = max(pos, end)
+    out.append(storage_html[pos:])
+    return "".join(out)
+
+
+def body_link_refs(storage_html: str, ancestor_titles: Sequence[str] = (),
+                   ancestor_ids: Sequence[str] = ()) -> List[SourceRef]:
+    """Every Confluence page link and URL (hyperlink or bare) in the given storage HTML as a SourceRef,
+    except links to the spec's own ancestor pages. Links to the same target are returned once."""
+    ctx = _Ctx(storage_html, frozenset(t.strip().lower() for t in ancestor_titles if t),
+               frozenset(str(i) for i in ancestor_ids if i))
+    refs: List[SourceRef] = []
+    seen = set()
+    for link in _cell(storage_html).links:
+        if ctx.is_ancestor(link):
+            continue
+        ref = _ref_from_link(link)
+        key = (ref.kind, (ref.title or "").lower(), ref.page_id, (ref.url or "").rstrip("/").lower())
+        if key not in seen:
+            seen.add(key)
+            refs.append(ref)
+    return refs
+
+
 def _ref_key(ref: SourceRef):
     if ref.excluded_reason or ref.parse_issue:
         return None

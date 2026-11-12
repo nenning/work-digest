@@ -209,7 +209,9 @@ class SpecMonitorConfig:
     ticket: Optional[TicketConfig] = None
     llm_timeout: int = 240                         # seconds per LLM call of the spec monitor (summaries, synthesis, rewrites)
     workers: int = 4                             # parallel source lookups / diff summaries per spec
-    analyse_all_states: bool = False               # set by the --all-states CLI flag (not a yaml key)
+    link_depth: int = 1                            # --check-references: link levels followed from the listed sources (0 = off, max 2)
+    link_max_pages: int = 50                       # --check-references: pages read per spec for that
+    analyse_all_states: bool = False              # set by the --all-states CLI flag (not a yaml key)
 
     def is_analysed(self, status: str) -> bool:
         return self.analyse_all_states or status.strip().casefold() in {s.strip().casefold() for s in self.analysis_states}
@@ -261,6 +263,7 @@ def effective_vision_llm(config: "Config") -> VisionLLMConfig:
 
 
 VALID_SELECTOR_TYPES = {"page_properties_id", "label"}
+MAX_LINK_DEPTH = 2
 
 
 def _parse_model_list(value, key: str) -> List[str]:
@@ -313,6 +316,12 @@ def _load_spec_monitor(raw: Optional[dict]) -> Optional[SpecMonitorConfig]:
             raise ValueError(f"spec_monitor.{moved} moved to the llm section: use llm.{new}")
     if cfg.llm_timeout < 1 or cfg.workers < 1 or cfg.retry.timeout_seconds <= 0:
         raise ValueError("spec_monitor.llm_timeout, spec_monitor.workers and spec_monitor.retry.timeout_seconds must be positive")
+    ref_raw = raw.get("reference_check") or {}
+    cfg.link_depth = int(ref_raw.get("link_depth", 1))
+    cfg.link_max_pages = int(ref_raw.get("max_pages", 50))
+    if not 0 <= cfg.link_depth <= MAX_LINK_DEPTH or cfg.link_max_pages < 1:
+        raise ValueError(f"spec_monitor.reference_check.link_depth must be 0..{MAX_LINK_DEPTH} (0 = off) "
+                         "and spec_monitor.reference_check.max_pages at least 1")
     ticket_raw = raw.get("ticket")
     if ticket_raw:
         if not ticket_raw.get("project"):

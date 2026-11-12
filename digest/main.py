@@ -11,6 +11,12 @@ _root = str(Path(__file__).resolve().parent.parent)
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
+# Piped/redirected stdout defaults to the ANSI codepage (cp1252) on Windows, which can't
+# encode e.g. "→"; run_digest.py also decodes our output as UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 import argparse
 import concurrent.futures
 import getpass
@@ -24,7 +30,7 @@ from typing import Dict, List, Optional
 from digest import problems
 from digest.auth.atlassian import get_auth_header, resolve_atlassian_config
 from digest.auth.microsoft import get_token
-from digest.config import heavy_llm, load_config
+from digest.config import MAX_LINK_DEPTH, heavy_llm, load_config
 from digest.email_sender import (
     send_via_smtp, send_via_com,
     send_mgmt_summary_via_smtp, send_mgmt_summary_via_com,
@@ -206,6 +212,28 @@ def main() -> None:
              "(ignores spec_monitor.analysis_states)",
     )
     parser.add_argument(
+        "--check-references",
+        action="store_true",
+        help="With --spec-monitor: instead of the source-change analysis, check every spec for references in its "
+             "text (ADRs, eCH standards, pages, links, documents) that its Quellen table does not list. "
+             "Not part of the standard run; checks all specs whatever their status",
+    )
+    parser.add_argument(
+        "--link-depth",
+        type=int,
+        choices=range(0, MAX_LINK_DEPTH + 1),
+        default=None,
+        metavar="N",
+        help="With --check-references: how many link levels to follow from the pages listed in the Quellen table to "
+             f"suggest missing source pages (0 = off, max {MAX_LINK_DEPTH}; default: spec_monitor.reference_check.link_depth, "
+             "else 1)",
+    )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help="With --check-references: open the report as an unsent Outlook mail draft (COM) instead of sending it",
+    )
+    parser.add_argument(
         "--create-ticket",
         default=None,
         metavar="TITLE_OR_ID",
@@ -284,6 +312,14 @@ def main() -> None:
         parser.error("the spec monitor modes and --mgmt-summary are mutually exclusive")
     if (args.spec or args.publish_page) and not args.spec_monitor:
         parser.error("--spec and --publish-page require --spec-monitor")
+    if args.check_references and not args.spec_monitor:
+        parser.error("--check-references requires --spec-monitor")
+    if args.draft and not args.check_references:
+        parser.error("--draft requires --check-references")
+    if args.link_depth is not None and not args.check_references:
+        parser.error("--link-depth requires --check-references")
+    if args.check_references and args.all_states:
+        parser.error("--all-states has no effect with --check-references (every spec is always checked)")
     if args.all_states and not (args.spec_monitor or args.update_spec):
         parser.error("--all-states requires --spec-monitor or --update-spec")
 
