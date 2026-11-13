@@ -295,9 +295,9 @@ set (the user named the spec explicitly), so the delta is always computed fresh.
   Draw.io previews (`<name>.png`, `<name>.drawio.png`) are skipped here.
 - **Per-version history:** for a Confluence source that moved several versions
   the monitor itemises up to 12 intermediate versions
-  (`SourceResult.steps`); the LLM summary attributes changes to versions and
-  dates; the reports deliberately show no per-version list (version numbers
-  and changed-line counts carry no content). Beyond the cap or with an
+  (`SourceResult.steps`); they only help the LLM describe the final state.
+  Summaries, change request and delta never mention version numbers or dates,
+  and the reports show no per-version list (they carry no content). Beyond the cap or with an
   unreadable version only the net diff is shown, with a warning.
 
 ## Confluence access notes

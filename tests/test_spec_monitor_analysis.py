@@ -368,7 +368,7 @@ def _steps():
 
 
 class TestSteps:
-    def test_prompt_contains_steps_and_attribution_instruction(self, cache):
+    def test_prompt_contains_steps_but_forbids_version_mentions(self, cache):
         with patch("digest.summarizer._call_openai", return_value='{"summary": "x"}') as m:
             summarize_source_diff(_result(steps=_steps()), _llm(), "de", cache)
         prompt = m.call_args.args[0]
@@ -378,7 +378,8 @@ class TestSteps:
         for needle in ("v47", "2026-10-05", "STEP-ONE", "v48", "2026-11-02", "STEP-TWO"):
             assert begin < prompt.index(needle) < end
         assert prompt.index("v47") < prompt.index("v48")
-        assert "ab v90 (02.11.)" in prompt
+        assert "Never mention version numbers or dates" in prompt
+        assert "ab v90" not in prompt
 
     def test_no_steps_prompt_unchanged(self, cache):
         with patch("digest.summarizer._call_openai", return_value='{"summary": "x"}') as m:
@@ -398,13 +399,12 @@ class TestSteps:
             summarize_source_diff(_result(steps=other), _llm(), "de", cache)
             assert m.call_count == 3
 
-    def test_synthesis_prompt_mentions_version_attribution(self, cache):
+    def test_synthesis_prompt_forbids_version_mentions(self, cache):
         with patch("digest.summarizer._call_openai", return_value=json.dumps(SYNTH)) as m:
             synthesize_spec(_spec(), [_result(steps=_steps())], _llm(), "de", cache)
         prompt = m.call_args.args[0]
-        assert "per-version" in prompt.lower()
-        assert "version/date" in prompt.lower()
-        assert "v47" in prompt and "v48" in prompt
+        assert "Never mention version numbers or dates" in prompt
+        assert "Changed in versions" not in prompt and "ab v90" not in prompt
 
 
 class TestTimeoutPassthrough:

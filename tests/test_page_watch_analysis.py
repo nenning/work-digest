@@ -73,12 +73,14 @@ class TestPageModeSummary:
         assert "Never mention version numbers or dates" in prompt
         assert "ab v90" not in prompt
 
-    def test_default_prompt_still_attributes_versions(self, cache):
+    def test_default_prompt_forbids_versions_but_keeps_compact_format(self, cache):
         r = _page().result
         r.steps = [SourceStep(version="4", when=datetime(2026, 11, 2), diff_text="+ x")]
         with patch("digest.summarizer._call_openai", return_value='{"summary": "x"}') as m:
             summarize_source_diff(r, _llm(), "de", cache)
-        assert "ab v90" in m.call_args.args[0] and "ONE change per line" not in m.call_args.args[0]
+        prompt = m.call_args.args[0]
+        assert "Never mention version numbers or dates" in prompt and "ab v90" not in prompt
+        assert "ONE change per line" not in prompt
 
     def test_new_page_prompt_says_it_did_not_exist(self, cache):
         r = _page(old=None).result

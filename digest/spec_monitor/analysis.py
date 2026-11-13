@@ -26,7 +26,7 @@ from digest.spec_monitor.models import (
 
 log = logging.getLogger(__name__)
 
-_PROMPT_VERSION = "1"
+_PROMPT_VERSION = "2"
 # Nothing is ever cut: input above these sizes is processed in several parts and merged.
 _SUMMARY_CHUNK_CHARS = 30000       # one source diff per summary call
 _SPEC_TEXT_MAX_CHARS = 200000      # specification text per synthesis call
@@ -189,20 +189,12 @@ def _build_summary_prompt(result: SourceResult, language: str, body: Optional[st
             f"The change is long; this is part {part[0]} of {part[1]} (consecutive). Summarise only this part; "
             "the partial summaries are merged afterwards."
         )
-    if result.steps and page_mode:
+    if result.steps:
         context.append(
             "The data also lists the changes per version ('Änderungen pro Version'). Describe only the final "
-            "state; later versions that revert or refine an earlier change are described by the final state. "
-            "Never mention version numbers or dates."
+            "state; later versions that revert or refine an earlier change are described by the final state."
         )
-    elif result.steps:
-        context.append(
-            "The data also lists the changes per version ('Änderungen pro Version'). Attribute each change "
-            "to the version and date it was introduced, e.g. 'ab v90 (02.11.)'; later versions that only "
-            "revert or refine an earlier change are described by the final state."
-        )
-    if page_mode:
-        context.append("Never mention version numbers or dates in the summary.")
+    context.append("Never mention version numbers or dates in the summary.")
     if page_mode:
         form = (
             "\nSummarise the meaningful additions, removals and changes as a short list: ONE change per line, "
@@ -272,8 +264,7 @@ def _merge_prompt(result: SourceResult, partials: List[str], language: str, page
         "Merge them into one summary in compact, keyword-focused phrases (incomplete sentences are fine, "
         "maximum information density). Keep every distinct change, drop duplicates, keep requirement or "
         "decision IDs verbatim and "
-        + ("never mention version numbers or dates. " if page_mode
-           else "keep version/date attributions such as 'ab v90 (02.11.)'. ")
+        + "never mention version numbers or dates. "
         + layout
         + "Do not repeat the source name.\n"
         f"Respond in {lang}. Keep original English technical terms unchanged.\n"
@@ -377,8 +368,6 @@ def _format_changed_source(r: SourceResult) -> str:
         lines.append(f"Change summary: {r.diff_summary}")
     elif r.diff_text:
         lines.append("Diff (- removed, + added):\n" + r.diff_text)
-    if r.steps:
-        lines.append("Changed in versions: " + ", ".join(_step_label(st) for st in r.steps))
     if r.diagram_notes:
         lines.append("Diagram notes: " + "; ".join(r.diagram_notes))
     if r.added_links:
@@ -420,9 +409,7 @@ def _build_synthesis_prompt(spec: SpecInfo, results: List[SourceResult], languag
         '"change": what must change, "reason": source plus old versus new quote, '
         '"blocking": true when implementation cannot start before it is clarified}. '
         "Keep new, changed and removed requirements separate. Describe content only, never document "
-        "structure or formatting. Sources may carry per-version attributions in their change summary "
-        "(e.g. 'ab v90 (02.11.)'); when a source change is attributed to a version or date, the "
-        '"reason" of the delta change must cite that version/date.\n'
+        "structure or formatting. Never mention version numbers or dates in any text.\n"
         '- "open_points": list of {"question": ..., "raised_by": source change that raised it} for '
         "all open points that must be clarified before implementation can start.\n"
         '- "effort": a rough effort estimate (T-shirt size plus person-day range) {"size": one of XS, S, M, L, XL, "person_days": range like '
