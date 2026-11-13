@@ -218,6 +218,19 @@ class SpecMonitorConfig:
 
 
 @dataclass
+class PageWatchConfig:
+    parent_page_id: str
+    window_days: int = 14
+    label: Optional[str] = None
+    include_parent: bool = True
+    recipient: Optional[str] = None
+    workers: int = 4
+    llm_timeout: int = 240
+    retry: RetryConfig = field(default_factory=RetryConfig)
+    publish_parent_page_id: Optional[str] = None   # confluence_page.parent_page_id
+
+
+@dataclass
 class Config:
     atlassian: AtlassianConfig
     m365: M365Config
@@ -230,6 +243,12 @@ class Config:
     smtp: Optional[SmtpConfig] = None
     spec_monitor: Optional[SpecMonitorConfig] = None
     gitlab: Optional[GitLabConfig] = None
+    page_watch: Optional[PageWatchConfig] = None
+
+
+def _watch_timeout(config: "Config") -> Optional[int]:
+    owner = config.spec_monitor or getattr(config, "page_watch", None)
+    return owner.llm_timeout if owner else None
 
 
 def heavy_llm(llm: LLMConfig) -> LLMConfig:
@@ -244,8 +263,8 @@ def spec_llm(config: "Config", purpose: str = "heavy") -> LLMConfig:
     if purpose not in ("heavy", "summary"):
         raise ValueError(f"spec_llm purpose must be 'heavy' or 'summary', got: {purpose!r}")
     llm = heavy_llm(config.llm) if purpose == "heavy" else config.llm
-    sm = config.spec_monitor
-    return dataclasses.replace(llm, llm_timeout=sm.llm_timeout if sm else llm.llm_timeout)
+    timeout = _watch_timeout(config)
+    return dataclasses.replace(llm, llm_timeout=timeout if timeout else llm.llm_timeout)
 
 
 def effective_vision_llm(config: "Config") -> VisionLLMConfig:
@@ -258,7 +277,7 @@ def effective_vision_llm(config: "Config") -> VisionLLMConfig:
         provider=llm.provider, api_key=llm.api_key,
         model=llm.vision_model or (llm.heavy_models or llm.models)[0],
         endpoint=llm.endpoint,
-        timeout=config.spec_monitor.llm_timeout if config.spec_monitor else max(llm.llm_timeout * 3, 90),
+        timeout=_watch_timeout(config) or max(llm.llm_timeout * 3, 90),
     )
 
 
@@ -277,6 +296,46 @@ def _parse_model_list(value, key: str) -> List[str]:
             raise ValueError(f"{key} entries must be non-empty strings, got: {value!r}")
         return [m.strip() for m in value]
     raise ValueError(f"{key} must be a comma-separated string or a list of model names, got: {value!r}")
+
+
+def _positive_int(value, key: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a positive integer, got: {value!r}")
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be a positive integer, got: {value!r}") from None
+    if number < 1 or (isinstance(value, float) and value != number):
+        raise ValueError(f"{key} must be a positive integer, got: {value!r}")
+    return number
+
+
+def _load_page_watch(raw: Optional[dict]) -> Optional[PageWatchConfig]:
+    if not raw:
+        return None
+    parent = raw.get("parent_page_id")
+    if not parent:
+        raise ValueError("page_watch.parent_page_id is required")
+    retry_raw = raw.get("retry") or {}
+    retry = RetryConfig(
+        attempts=int(retry_raw.get("attempts", 3)),
+        backoff_seconds=float(retry_raw.get("backoff_seconds", 2)),
+        timeout_seconds=float(retry_raw.get("timeout_seconds", 60)),
+    )
+    if retry.timeout_seconds <= 0:
+        raise ValueError("page_watch.retry.timeout_seconds must be positive")
+    publish = (raw.get("confluence_page") or {}).get("parent_page_id")
+    return PageWatchConfig(
+        parent_page_id=str(parent),
+        window_days=_positive_int(raw.get("window_days", 14), "page_watch.window_days"),
+        label=str(raw["label"]) if raw.get("label") else None,
+        include_parent=bool(raw.get("include_parent", True)),
+        recipient=raw.get("recipient") or None,
+        workers=_positive_int(raw.get("workers", 4), "page_watch.workers"),
+        llm_timeout=_positive_int(raw.get("llm_timeout", 240), "page_watch.llm_timeout"),
+        retry=retry,
+        publish_parent_page_id=str(publish) if publish else None,
+    )
 
 
 def _load_spec_monitor(raw: Optional[dict]) -> Optional[SpecMonitorConfig]:
@@ -516,4 +575,5 @@ def load_config(path: Path) -> Config:
         smtp=_load_smtp(raw.get("smtp")),
         spec_monitor=_load_spec_monitor(raw.get("spec_monitor")),
         gitlab=_load_gitlab(raw.get("gitlab")),
+        page_watch=_load_page_watch(raw.get("page_watch")),
     )

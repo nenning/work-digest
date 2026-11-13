@@ -128,7 +128,7 @@ def test_search_descendants_paginates_and_builds_cql(tmp_path, patch_http):
     client, calls, fake = make_client(tmp_path, router)
     patch_http(fake)
     out = client.search_descendants("668", label="spec")
-    assert out == [{"id": "1", "title": "A", "version": 3}, {"id": "2", "title": "B", "version": 4}]
+    assert out == [{"id": "1", "title": "A", "version": 3, "when": None}, {"id": "2", "title": "B", "version": 4, "when": None}]
     cql = calls[0][2]["params"]["cql"]
     assert "ancestor=668" in cql and "type=page" in cql and 'label = "spec"' in cql
     assert calls[1][1] == "https://x.atlassian.net/wiki/rest/api/content/search?cql=x&start=1"

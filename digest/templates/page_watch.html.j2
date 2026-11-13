@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ L.title }}</title>
+  <style>
+    body {
+      margin: 0; padding: 0;
+      background: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      color: #1e293b;
+    }
+    .card {
+      max-width: 1200px; margin: 0 auto; text-align: left;
+      background: #ffffff;
+      border-radius: 10px; overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+    .header { background: #1e293b; color: #f8fafc; padding: 22px 28px; }
+    .header h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+    .header-range { margin: 6px 0 0; font-size: 12px; color: #94a3b8; }
+    .block { padding: 20px 28px; border-bottom: 1px solid #e2e8f0; }
+    .block h2 { margin: 0 0 12px; font-size: 16px; font-weight: 700; color: #0f172a; }
+    .block.spec { border-top: 12px solid #cbd5e1; padding-top: 28px; padding-bottom: 28px; }
+    .block.spec h2 { font-size: 18px; }
+    .block h3 {
+      margin: 18px 0 8px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .08em; color: #64748b;
+    }
+    .block { overflow-wrap: anywhere; word-break: break-word; }
+    .block a { color: #1d4ed8; text-decoration: underline; }
+    .toc { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7; }
+    .problem-banner {
+      background: #fef2f2; border-left: 4px solid #dc2626; color: #991b1b;
+      border-radius: 4px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; font-weight: 600;
+    }
+    .lst { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+    .meta { font-size: 12px; color: #64748b; margin: 0 0 12px; }
+    .lst.changes { font-size: 14px; line-height: 1.55; margin-bottom: 12px; }
+    .lst.changes li { margin-bottom: 6px; }
+    table.t { width: 100%; max-width: 100%; border-collapse: collapse; font-size: 12px; }
+    table.t th {
+      text-align: left; background: #f8fafc; color: #475569; font-weight: 600;
+      padding: 6px 8px; border-bottom: 2px solid #e2e8f0;
+    }
+    table.t td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+    .cls { font-weight: 600; white-space: nowrap; }
+    .cls-changed { color: #b45309; }
+    .cls-new { color: #15803d; }
+    .warn {
+      background: #fff7ed; border-left: 4px solid #f97316; border-radius: 4px;
+      padding: 8px 12px; margin: 0 0 8px; font-size: 13px; color: #9a3412;
+    }
+    .cr { font-size: 14px; line-height: 1.7; }
+    .cr p { margin: 0 0 12px; }
+    .effort {
+      background: #f0f9ff; border-left: 4px solid #0ea5e9; border-radius: 4px;
+      padding: 8px 12px; font-size: 13px; color: #0c4a6e;
+    }
+    .delta-item {
+      border-radius: 6px; padding: 10px 14px; margin-bottom: 10px;
+      background: #f8fafc; border-left: 4px solid #0ea5e9; font-size: 13px; line-height: 1.5;
+    }
+    .delta-item.blocking { border-left-color: #dc2626; }
+    .delta-title { font-weight: 600; margin-bottom: 4px; }
+    .tag-blocking {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+      color: #ffffff; background: #dc2626; border-radius: 3px; padding: 1px 6px; margin-left: 6px;
+    }
+    .label { color: #64748b; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+    .theme {
+      background: #f8fafc; border-left: 4px solid #6366f1; border-radius: 6px;
+      padding: 10px 14px; margin-bottom: 10px; font-size: 13px; line-height: 1.5;
+    }
+    .theme-title { font-weight: 600; margin-bottom: 4px; }
+    .stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+    .stat { background: #f1f5f9; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #475569; }
+    .stat strong { display: block; font-size: 18px; color: #0f172a; }
+    .footer { padding: 16px 28px; text-align: left; font-size: 12px; color: #94a3b8; }
+    .cmdline {
+      margin: 8px 0 0; font-family: "Courier New", Courier, monospace;
+      font-size: 10px; color: #94a3b8; word-break: break-all;
+    }
+    @media (max-width: 600px) {
+      .header, .block, .footer { padding-left: 16px; padding-right: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f1f5f9; padding:24px 0;">
+    <tr><td align="center" style="padding:0 24px;">
+      <div class="card">
+
+        <div class="header">
+          <h1>{{ L.title }}: {% if parent_url %}<a href="{{ parent_url }}" target="_blank" rel="noopener" style="color:#f8fafc;">{{ report.parent_title }}</a>{% else %}{{ report.parent_title }}{% endif %}</h1>
+          <p class="header-range">{{ L.window }}: {{ window }} &middot; {{ L.generated }}: {{ generated }}</p>
+        </div>
+
+        <div class="block" id="toc">
+          <h2>{{ L.toc }}</h2>
+          <ol class="toc">
+            {% for anchor, label in toc %}<li><a href="#{{ anchor }}">{{ label }}</a></li>{% endfor %}
+          </ol>
+        </div>
+
+        <div class="block" id="overview">
+          <h2>{{ L.overview }}</h2>
+          {% if problem_count %}
+          <div class="problem-banner">{{ problem_count }} {{ L.problems }} <a href="#errors">{{ L.errors }}</a></div>
+          {% endif %}
+          <div class="stats">
+            <div class="stat"><strong>{{ counts.checked }}</strong>{{ L.checked }}</div>
+            <div class="stat"><strong>{{ counts.changed }}</strong>{{ L.changed_pages }}</div>
+            <div class="stat"><strong>{{ counts.new }}</strong>{{ L.new_pages }}</div>
+            {% if counts.error %}<div class="stat"><strong>{{ counts.error }}</strong>{{ L.error_pages }}</div>{% endif %}
+          </div>
+
+          <h3>{{ L.page_changes }} ({{ changed_links|length }})</h3>
+          {% if changed_links %}<ul class="lst">
+            {% for s in changed_links %}<li><a href="#{{ s.anchor }}">{{ s.title }}</a></li>{% endfor %}
+          </ul>{% else %}<p class="meta">{{ L.no_changes }}</p>{% endif %}
+          {% if counts.quiet %}<p class="meta">{{ counts.quiet }} {{ L.quiet }}</p>{% endif %}
+        </div>
+
+        {% for p in pages %}
+        <div class="block spec" id="{{ p.anchor }}">
+          <h2>{{ p.title }}</h2>
+          <p class="meta">
+            <span class="cls cls-{{ p.cls }}">{{ p.status }}</span>
+            {% if p.path %} &middot; {{ L.location }}: {{ p.path }}{% endif %}
+            {% if p.url %} &middot; <a href="{{ p.url }}" target="_blank" rel="noopener">Confluence</a>{% endif %}
+            &middot; {% if p.old_url %}<a href="{{ p.old_url }}" target="_blank" rel="noopener">{{ p.old }}</a>{% else %}{{ p.old }}{% endif %}
+            &rarr; {% if p.new_url %}<a href="{{ p.new_url }}" target="_blank" rel="noopener">{{ p.new }}</a>{% else %}{{ p.new }}{% endif %}
+            {% if p.diff_url %} &middot; <a href="{{ p.diff_url }}" target="_blank" rel="noopener">{{ L.diff }}</a>{% endif %}
+          </p>
+
+          {% if p.summary %}<ul class="lst changes">{% for s in p.summary %}<li>{{ s|linkify }}</li>{% endfor %}</ul>{% endif %}
+          {% for d in p.detail %}<div class="warn">{{ d|linkify }}</div>{% endfor %}
+
+          {% if p.delta_groups %}
+          <h3>{{ L.delta }}</h3>
+          {% for g in p.delta_groups %}
+          <div class="label">{{ g.label }}</div>
+          {% for c in g.entries %}
+          <div class="delta-item{% if c.blocking %} blocking{% endif %}">
+            <div class="delta-title">{{ c.affected_part|linkify }}{% if c.ids %} ({{ c.ids|join(', ') }}){% endif %}{% if c.blocking %}<span class="tag-blocking">{{ L.blocking }}</span>{% endif %}</div>
+            {% if c.current_statement %}<div><span class="label">{{ L.current }}:</span> {{ c.current_statement|linkify }}</div>{% endif %}
+            {% if c.change %}<div><span class="label">{{ L.change }}:</span> {{ c.change|linkify }}</div>{% endif %}
+            {% if c.reason %}<div><span class="label">{{ L.reason }}:</span> {{ c.reason|linkify }}</div>{% endif %}
+          </div>
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+        </div>
+        {% endfor %}
+
+        {% if syn or report.analysis_incomplete %}
+        <div class="block spec" id="summary">
+          <h2>{{ L.summary_title }}</h2>
+          {% if report.analysis_incomplete %}<div class="warn">{{ L.incomplete }}</div>{% endif %}
+          {% if syn %}
+          <div class="cr">{% for s in overview_paragraphs %}<p>{{ s|linkify }}</p>{% endfor %}</div>
+
+          {% if syn.themes %}
+          <h3>{{ L.themes }}</h3>
+          {% for t in syn.themes %}
+          <div class="theme">
+            <div class="theme-title">{{ t.title }}</div>
+            {% if t.summary %}<div>{{ t.summary|linkify }}</div>{% endif %}
+            {% if t.pages %}<div class="meta">{{ L.pages }}: {{ t.pages|join(', ') }}</div>{% endif %}
+          </div>
+          {% endfor %}
+          {% endif %}
+
+          <h3>{{ L.change_request }}</h3>
+          <div class="cr">{% for s in change_request %}<p>{{ s|linkify }}</p>{% endfor %}</div>
+
+          {% if syn.effort %}
+          <div class="effort">
+            <strong>{{ L.effort_ai }}:</strong>
+            {{ L.size }} {{ syn.effort.size }}, {{ syn.effort.person_days }} {{ L.person_days }}
+            {% if syn.effort.rationale %}<br />{{ syn.effort.rationale|linkify }}{% endif %}
+          </div>
+          {% endif %}
+
+          {% if other_delta_groups %}
+          <h3>{{ L.other_delta }}</h3>
+          {% for g in other_delta_groups %}
+          <div class="label">{{ g.label }}</div>
+          {% for c in g.entries %}
+          <div class="delta-item{% if c.blocking %} blocking{% endif %}">
+            <div class="delta-title">{{ c.affected_part|linkify }}{% if c.page %} ({{ c.page }}){% endif %}{% if c.ids %} ({{ c.ids|join(', ') }}){% endif %}</div>
+            {% if c.change %}<div><span class="label">{{ L.change }}:</span> {{ c.change|linkify }}</div>{% endif %}
+            {% if c.reason %}<div><span class="label">{{ L.reason }}:</span> {{ c.reason|linkify }}</div>{% endif %}
+          </div>
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+
+          {% if syn.open_points %}
+          <h3>{{ L.open_points }}</h3>
+          <ul class="lst">
+            {% for p in syn.open_points %}<li>{{ p.question|linkify }}{% if p.raised_by %} <span class="meta">({{ L.raised_by }}: {{ p.raised_by }})</span>{% endif %}</li>{% endfor %}
+          </ul>
+          {% endif %}
+
+          {% if syn.warnings %}
+          <h3>{{ L.synthesis_warnings }}</h3>
+          {% for w in syn.warnings %}<div class="warn">{{ w|linkify }}</div>{% endfor %}
+          {% endif %}
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="block" id="errors">
+          <h2>{{ L.errors }}</h2>
+          {% if errors %}
+          <table class="t" width="100%" cellpadding="0" cellspacing="0">
+            <tr><th>{{ L.err_scope }}</th><th>{{ L.err_message }}</th><th>{{ L.err_attempts }}</th><th>{{ L.err_impact }}</th></tr>
+            {% for e in errors %}
+            <tr><td>{{ e.scope|linkify }}</td><td>{{ e.message|linkify }}</td><td>{{ e.attempts }}</td><td>{{ e.impact|linkify }}</td></tr>
+            {% endfor %}
+          </table>
+          {% else %}<p class="meta">{{ L.no_errors }}</p>{% endif %}
+        </div>
+
+        <div class="footer">
+          {{ L.ai_note }} &middot; {{ L.footer_cache }}: {{ report.cache_hits }} &amp; {{ report.cache_misses }}{{ cache_corrupt_note }}
+          {% if report.command_line %}<div class="cmdline">{{ L.footer_cmd }}: {{ report.command_line }}</div>{% endif %}
+        </div>
+
+      </div>
+    </td></tr>
+  </table>
+</body>
+</html>

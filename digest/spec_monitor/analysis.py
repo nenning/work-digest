@@ -164,41 +164,74 @@ def _summary_body(result: SourceResult) -> str:
 
 
 def _build_summary_prompt(result: SourceResult, language: str, body: Optional[str] = None,
-                          part: Optional[Tuple[int, int]] = None) -> str:
+                          part: Optional[Tuple[int, int]] = None, page_mode: bool = False) -> str:
     ref = result.ref
     lang = summarizer._language_name(language)
     if body is None:
         body = _summary_body(result)
-    context = [
-        f"Source: {ref.name} (version {_version_str(result.old)} -> {_version_str(result.new)})",
-        f"This source is used in the specification for: {ref.used_for or 'not stated'}",
-    ]
-    if ref.section:
-        context.append(f"Only this part of the source is relevant: {ref.section}")
+    if page_mode:
+        old = "page did not exist before" if result.old is None else _version_str(result.old)
+        context = [f"Page: {ref.name} (version {old} -> {_version_str(result.new)})"]
+        intro = "The following shows what changed on a page of a specification that is being implemented."
+        scope = "Mention what part of the specification is affected, based on the headings and the content.\n"
+    else:
+        context = [
+            f"Source: {ref.name} (version {_version_str(result.old)} -> {_version_str(result.new)})",
+            f"This source is used in the specification for: {ref.used_for or 'not stated'}",
+        ]
+        if ref.section:
+            context.append(f"Only this part of the source is relevant: {ref.section}")
+        intro = "The following shows what changed in a source document that a specification is based on."
+        scope = ("Do not repeat the source name. Mention what part of the specification is affected, "
+                 "based on the 'used for' text.\n")
     if part:
         context.append(
             f"The change is long; this is part {part[0]} of {part[1]} (consecutive). Summarise only this part; "
             "the partial summaries are merged afterwards."
         )
-    if result.steps:
+    if result.steps and page_mode:
+        context.append(
+            "The data also lists the changes per version ('Änderungen pro Version'). Describe only the final "
+            "state; later versions that revert or refine an earlier change are described by the final state. "
+            "Never mention version numbers or dates."
+        )
+    elif result.steps:
         context.append(
             "The data also lists the changes per version ('Änderungen pro Version'). Attribute each change "
             "to the version and date it was introduced, e.g. 'ab v90 (02.11.)'; later versions that only "
             "revert or refine an earlier change are described by the final state."
         )
+    if page_mode:
+        context.append("Never mention version numbers or dates in the summary.")
+    if page_mode:
+        form = (
+            "\nSummarise the meaningful additions, removals and changes as a short list: ONE change per line, "
+            "lines separated by a line break, at most 6 lines, no bullet characters, no numbering. Each line "
+            "starts with the affected topic, a colon, then what changed, from what to what (e.g. 'Status "
+            "Process: canceled entfernt, neu requestWithdrawn'). Most important change first. Do not "
+            "mention things that stay the same.\n"
+            "Diagram changes (lines starting with \"diagram '<name>'\" and the 'Node'/'Edge' lines) are low level: "
+            "never list nodes or edges one by one. Translate them into what the diagram now says (flow, rule, "
+            "responsibility, state), put them on their own line(s) starting with the diagram name and a colon "
+            "(e.g. 'Diagramm Lifecycle Process: Löschfrist neu im Batch Processing statt Core-Job'). A node "
+            "removed together with a node added that has almost the same text is one reworded or moved "
+            "statement: report the new meaning, not remove + add. Ignore edges that only follow from such nodes.\n"
+        )
+    else:
+        form = ("\nSummarise the meaningful additions, removals and changes in 1-3 compact, keyword-focused "
+                "phrases (incomplete sentences are fine, maximum information density).\n")
     return (
-        "The following shows what changed in a source document that a specification is based on.\n"
+        intro + "\n"
         + "\n".join(context)
-        + "\nSummarise the meaningful additions, removals and changes in 1-3 compact, keyword-focused "
-        "phrases (incomplete sentences are fine, maximum information density).\n"
-        "Focus strictly on the actual content: which rules, requirements, fields, states, decisions or "
+        + form
+        + "Focus strictly on the actual content: which rules, requirements, fields, states, decisions or "
         "numbers changed, from what to what. Never describe the structure or formatting of the "
         "document (e.g. do not say 'a table was added' or 'a section was restructured'); if "
         "structural scaffolding contains real content, summarise the content.\n"
         "Name requirement or decision IDs (e.g. CM-FR-03) verbatim when they appear. "
-        "Do not repeat the source name. Mention what part of the specification is affected, "
-        "based on the 'used for' text.\n"
-        f"Respond in {lang}. Keep original English technical terms unchanged.\n"
+        + ("Do not repeat the page name. " if page_mode else "")
+        + scope
+        + f"Respond in {lang}. Keep original English technical terms unchanged.\n"
         'Return {"summary": null} if the changes are purely cosmetic or structural (typos, '
         "punctuation, rewording without new meaning, scaffolding without concrete content).\n"
         f"{_DATA_NOTE}\n\n"
@@ -227,16 +260,22 @@ def _ask_summary(prompt: str, llm: LLMConfig, cache: SpecCache) -> str:
     return summary
 
 
-def _merge_prompt(result: SourceResult, partials: List[str], language: str) -> str:
+def _merge_prompt(result: SourceResult, partials: List[str], language: str, page_mode: bool = False) -> str:
     lang = summarizer._language_name(language)
     numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(partials, 1))
+    what = (f"a page of a specification (page: {result.ref.name})" if page_mode
+            else f"a source document that a specification is based on (source: {result.ref.name})")
+    layout = ("Keep the format: ONE change per line, lines separated by a line break, no bullet characters, "
+              "diagram changes on their own lines. " if page_mode else "")
     return (
-        "Below are partial summaries of consecutive parts of ONE long change in a source document that a "
-        f"specification is based on (source: {result.ref.name}).\n"
+        f"Below are partial summaries of consecutive parts of ONE long change in {what}.\n"
         "Merge them into one summary in compact, keyword-focused phrases (incomplete sentences are fine, "
         "maximum information density). Keep every distinct change, drop duplicates, keep requirement or "
-        "decision IDs verbatim and keep version/date attributions such as 'ab v90 (02.11.)'. "
-        "Do not repeat the source name.\n"
+        "decision IDs verbatim and "
+        + ("never mention version numbers or dates. " if page_mode
+           else "keep version/date attributions such as 'ab v90 (02.11.)'. ")
+        + layout
+        + "Do not repeat the source name.\n"
         f"Respond in {lang}. Keep original English technical terms unchanged.\n"
         f"{_DATA_NOTE}\n\n"
         + _quote("partial summaries", numbered)
@@ -245,7 +284,7 @@ def _merge_prompt(result: SourceResult, partials: List[str], language: str) -> s
 
 
 def _merge_summaries(result: SourceResult, partials: List[str], llm: LLMConfig, language: str,
-                     cache: SpecCache) -> str:
+                     cache: SpecCache, page_mode: bool = False) -> str:
     """Reduce partial summaries to one; merges in rounds when the partials themselves are long."""
     while len(partials) > 1:
         groups: List[List[str]] = []
@@ -260,26 +299,27 @@ def _merge_summaries(result: SourceResult, partials: List[str], llm: LLMConfig, 
         groups.append(current)
         if len(groups) == len(partials):
             groups = [partials[i:i + 2] for i in range(0, len(partials), 2)]
-        partials = [s for s in (_ask_summary(_merge_prompt(result, g, language), llm, cache) for g in groups) if s]
+        partials = [s for s in (_ask_summary(_merge_prompt(result, g, language, page_mode), llm, cache) for g in groups) if s]
     return partials[0] if partials else ""
 
 
-def summarize_source_diff(result: SourceResult, llm: LLMConfig, language: str, cache: SpecCache) -> str:
+def summarize_source_diff(result: SourceResult, llm: LLMConfig, language: str, cache: SpecCache,
+                          page_mode: bool = False) -> str:
     if not result.diff_text and not result.diagram_notes:
         return ""
     chunks = _split_text(_summary_body(result), _SUMMARY_CHUNK_CHARS)
     if len(chunks) == 1:
-        return _ask_summary(_build_summary_prompt(result, language, chunks[0]), llm, cache)
+        return _ask_summary(_build_summary_prompt(result, language, chunks[0], page_mode=page_mode), llm, cache)
     partials = []
     for i, chunk in enumerate(chunks, 1):
-        s = _ask_summary(_build_summary_prompt(result, language, chunk, (i, len(chunks))), llm, cache)
+        s = _ask_summary(_build_summary_prompt(result, language, chunk, (i, len(chunks)), page_mode), llm, cache)
         if s:
             partials.append(s)
     if not partials:
         return ""
     if len(partials) == 1:
         return partials[0]
-    return _merge_summaries(result, partials, llm, language, cache)
+    return _merge_summaries(result, partials, llm, language, cache, page_mode)
 
 
 def _plain(fragment: str) -> str:

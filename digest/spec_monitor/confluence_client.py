@@ -120,7 +120,8 @@ class ConfluenceClient:
             f"descendants of {parent_id}",
         )
         return [
-            {"id": str(r["id"]), "title": r.get("title", ""), "version": (r.get("version") or {}).get("number")}
+            {"id": str(r["id"]), "title": r.get("title", ""), "version": (r.get("version") or {}).get("number"),
+             "when": (r.get("version") or {}).get("when")}
             for r in raw
         ]
 

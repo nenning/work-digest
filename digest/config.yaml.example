@@ -144,6 +144,24 @@ data_dir: ~/.digest
 #     remote_link: true                  # add the Confluence page as a web link on the ticket
 #     link_type: Relates                 # link to the Jira tickets named on the spec page
 
+# Page watch (--page-watch flag). Optional, independent of spec_monitor. Reports what changed on a Confluence
+# page and all pages below it in the last N days: changes per page, overall summary, change request,
+# delta specification, effort. No state: every run looks at the last window_days days.
+# page_watch:
+#   parent_page_id: "41484320"           # this page and all its descendants are watched
+#   window_days: 14                      # default 14; --days N overrides
+#   label: ""                            # optional: only descendants with this label (the parent is always included)
+#   include_parent: true                 # default true
+#   recipient: ""                        # optional — falls back to spec_monitor.recipient, mgmt_summary.recipient, email.recipient
+#   workers: 4                           # parallel page lookups and diff summaries
+#   llm_timeout: 240                     # seconds per LLM call of this mode
+#   retry:
+#     attempts: 3
+#     backoff_seconds: 2
+#     timeout_seconds: 60
+#   confluence_page:
+#     parent_page_id: "..."              # where --publish-page creates the report page; required only for that flag
+
 # GitLab connection for repository sources (ADRs, API concept in the diagram repo).
 # Optional; without it repo sources are listed as "not monitored". Only the doc folder of each
 # repository is configured: the monitor finds the referenced document there by path, ADR number

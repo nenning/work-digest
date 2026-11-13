@@ -115,6 +115,16 @@ def _print_timing(t_fetch: float, t_sum: float, t_del: float, n_fetched: int, n_
     print(f"  {'total':<11} {t_fetch + t_sum + t_del:5.1f}s")
 
 
+def _positive_days(value: str) -> int:
+    try:
+        days = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a positive whole number of days, got: {value!r}") from None
+    if days < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive whole number of days, got: {value!r}")
+    return days
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Work digest CLI")
     parser.add_argument(
@@ -203,7 +213,21 @@ def main() -> None:
     parser.add_argument(
         "--publish-page",
         action="store_true",
-        help="In spec monitor: also create a Confluence page with the collected details",
+        help="In spec monitor and page watch: also create a Confluence page with the collected details",
+    )
+    parser.add_argument(
+        "--page-watch",
+        action="store_true",
+        help="Report what changed on the configured Confluence page tree (page_watch block) in the last N days: "
+             "changes per page, overall summary, change request, delta spec, effort "
+             "(see docs/architecture/page-watch.md)",
+    )
+    parser.add_argument(
+        "--days",
+        type=_positive_days,
+        default=None,
+        metavar="N",
+        help="With --page-watch: length of the window in days (default: page_watch.window_days, 14)",
     )
     parser.add_argument(
         "--all-states",
@@ -305,13 +329,17 @@ def main() -> None:
         print("SMTP authentication stored successfully.")
         return
 
-    spec_mode = args.spec_monitor or bool(args.create_ticket) or bool(args.update_spec)
-    if sum([bool(args.spec_monitor), bool(args.create_ticket), bool(args.update_spec)]) > 1:
-        parser.error("--spec-monitor, --create-ticket and --update-spec are mutually exclusive")
+    spec_mode = args.spec_monitor or bool(args.create_ticket) or bool(args.update_spec) or args.page_watch
+    if sum([bool(args.spec_monitor), bool(args.create_ticket), bool(args.update_spec), args.page_watch]) > 1:
+        parser.error("--spec-monitor, --create-ticket, --update-spec and --page-watch are mutually exclusive")
     if spec_mode and args.mgmt_summary:
-        parser.error("the spec monitor modes and --mgmt-summary are mutually exclusive")
-    if (args.spec or args.publish_page) and not args.spec_monitor:
-        parser.error("--spec and --publish-page require --spec-monitor")
+        parser.error("the spec monitor modes, --page-watch and --mgmt-summary are mutually exclusive")
+    if args.spec and not args.spec_monitor:
+        parser.error("--spec requires --spec-monitor")
+    if args.publish_page and not (args.spec_monitor or args.page_watch):
+        parser.error("--publish-page requires --spec-monitor or --page-watch")
+    if args.days is not None and not args.page_watch:
+        parser.error("--days requires --page-watch")
     if args.check_references and not args.spec_monitor:
         parser.error("--check-references requires --spec-monitor")
     if args.draft and not args.check_references:

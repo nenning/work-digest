@@ -79,7 +79,104 @@ def dispatch(args, config: Config, cache_file: Path, command_line: str) -> None:
             log.info(report)
 
 
+def _watch_recipient(config: Config) -> Optional[str]:
+    sm_recipient = config.spec_monitor.recipient if config.spec_monitor else None
+    return config.page_watch.recipient or sm_recipient or config.mgmt_summary.recipient or config.email.recipient
+
+
+def _exit_on_watch_problems(report) -> None:
+    from digest.spec_monitor import page_watch_report as watch_report
+    n = watch_report.problem_count(report)
+    if n:
+        print(f"ERROR: the run finished with {n} problem(s) (see the error table in the report); exiting with code 2",
+              file=sys.stderr)
+        raise SystemExit(2)
+
+
+def _watch_console_summary(report) -> None:
+    from digest.spec_monitor.models import PageStatus
+    counts = {s: len(report.with_status(s)) for s in PageStatus}
+    print(f"\nPage watch: {len(report.pages)} page(s) checked since {report.window_start} "
+          f"({counts[PageStatus.CHANGED]} changed, {counts[PageStatus.NEW]} new, "
+          f"{counts[PageStatus.COSMETIC_ONLY]} cosmetic only, {counts[PageStatus.UNCHANGED]} unchanged, "
+          f"{counts[PageStatus.ERROR]} error)")
+    for p in report.with_status(PageStatus.CHANGED, PageStatus.NEW):
+        print(f"  - {p.title} ({p.status.value})")
+    for e in report.errors:
+        print(f"      ERROR {e.scope}: {e.message}")
+
+
+def run_page_watch_cli(args, config: Config, cache_file: Path, command_line: str) -> None:
+    """`--page-watch`: mail (or dry-run preview), optional Confluence page. Reads and writes no state; the HTML
+    of the report is also kept as `<data_dir>/spec_cache/page-watch-latest.html` after a delivered run."""
+    from digest.spec_monitor import page_watch_report as watch_report
+    from digest.spec_monitor.page_watch import run_page_watch
+
+    pw = config.page_watch
+    if pw is None:
+        raise RuntimeError("No page_watch block configured. Add one to config.yaml to use --page-watch.")
+    if args.publish_page and not pw.publish_parent_page_id:
+        raise ValueError("--publish-page requires page_watch.confluence_page.parent_page_id in config.yaml")
+    recipient = _watch_recipient(config)
+    if not recipient and not args.dry_run:
+        raise RuntimeError("email.recipient (or mgmt_summary.recipient / page_watch.recipient) must be set in config.yaml")
+
+    try:
+        report = run_page_watch(config, days=getattr(args, "days", None), command_line=command_line)
+    except SpecMonitorFatal as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        if recipient and not args.dry_run:
+            try:
+                if not _deliver(config, cache_file, f"{sm_prefix(config)} Fehler",
+                                f"<p>Seiten-Überwachung fehlgeschlagen:</p><pre>{_esc(str(exc))}</pre>", recipient):
+                    print("ERROR: the error mail could not be sent (see the delivery error above); "
+                          "this console output is the only notice of the failed run", file=sys.stderr)
+            except Exception as mail_exc:
+                print(f"ERROR: could not send the error mail: {mail_exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    subject = watch_report.build_subject(config.email.subject_prefix, report)
+    html_body = watch_report.render_mail_html(report)
+    _watch_console_summary(report)
+    out_dir = config.data_dir / "spec_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.dry_run:
+        (out_dir / "page-watch-preview.html").write_text(_with_statistics(html_body), encoding="utf-8")
+        print(f"Preview written to {out_dir / 'page-watch-preview.html'}")
+        if args.publish_page:
+            (out_dir / "page-watch-preview.confluence.html").write_text(
+                watch_report.render_confluence_storage(report), encoding="utf-8")
+            print(f"Confluence page preview written to {out_dir / 'page-watch-preview.confluence.html'} (not published)")
+        _exit_on_watch_problems(report)
+        return
+
+    print(f"Sending to {recipient}...")
+    if not _deliver(config, cache_file, subject, html_body, recipient):
+        print("ERROR: mail delivery failed", file=sys.stderr)
+        raise SystemExit(1)
+    (out_dir / "page-watch-latest.html").write_text(html_body, encoding="utf-8")
+    print(f"Report kept as {out_dir / 'page-watch-latest.html'}")
+
+    if args.publish_page:
+        title = f"Seitenänderungen {report.parent_title} {report.generated_at.strftime('%Y-%m-%d %H:%M')}"
+        try:
+            url = publish_page(
+                config.atlassian, get_auth_header(config.atlassian), pw.retry, pw.publish_parent_page_id,
+                title, watch_report.render_confluence_storage(report), "Page watch run",
+            )
+        except Exception as exc:
+            print(f"ERROR: Confluence page could not be published: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"Confluence page: {url}")
+
+    _exit_on_watch_problems(report)
+
+
 def _dispatch(args, config: Config, cache_file: Path, command_line: str) -> None:
+    if getattr(args, "page_watch", False):
+        run_page_watch_cli(args, config, cache_file, command_line)
+        return
     if config.spec_monitor is None:
         raise RuntimeError("No spec_monitor block configured. Add one to config.yaml to use the spec monitor.")
     from digest.spec_monitor.spec_ref import UPDATE_ALL, normalize_spec_ref

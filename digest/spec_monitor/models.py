@@ -131,6 +131,7 @@ class DeltaChange:
     change: str = ""
     reason: str = ""                         # source + old vs new quote
     blocking: bool = False
+    page: str = ""                           # --page-watch: title of the page the change comes from
 
 
 @dataclass
@@ -249,3 +250,67 @@ class RunReport:
     command_line: str = ""
     commit_baselines: Optional[Callable[[], List[str]]] = None   # set when baseline writes were deferred
     language: str = "de"
+
+
+class PageStatus(str, Enum):
+    CHANGED = "changed"
+    NEW = "new"
+    COSMETIC_ONLY = "cosmetic only"
+    UNCHANGED = "unchanged"
+    ERROR = "error"
+
+
+@dataclass
+class PageChange:
+    """One page of a --page-watch run."""
+    page_id: str
+    title: str
+    url: str
+    status: PageStatus
+    path: List[str] = field(default_factory=list)    # ancestor titles below the watched parent, outermost first
+    result: Optional[SourceResult] = None
+    summary: str = ""
+    summary_failed: str = ""                         # reason, when the per-page LLM summary failed
+    warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+
+@dataclass
+class Theme:
+    title: str
+    summary: str = ""
+    pages: List[str] = field(default_factory=list)   # titles of the pages that belong to the theme
+
+
+@dataclass
+class WatchSynthesis:
+    overview: str
+    themes: List[Theme] = field(default_factory=list)
+    change_request: str = ""
+    delta_changes: List[DeltaChange] = field(default_factory=list)
+    open_points: List[OpenPoint] = field(default_factory=list)
+    effort: Optional[EffortEstimate] = None
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class PageWatchReport:
+    generated_at: datetime
+    parent_title: str = ""
+    parent_url: str = ""
+    window_days: int = 14
+    window_start: Optional[date] = None      # first day covered by the window
+    pages: List[PageChange] = field(default_factory=list)
+    synthesis: Optional[WatchSynthesis] = None
+    analysis_incomplete: bool = False
+    errors: List[ReportError] = field(default_factory=list)
+    cache_hits: int = 0
+    cache_misses: int = 0
+    cache_corrupt: int = 0
+    cache_write_errors: int = 0
+    cache_write_error: str = ""
+    command_line: str = ""
+    language: str = "de"
+
+    def with_status(self, *statuses: "PageStatus") -> List[PageChange]:
+        return [p for p in self.pages if p.status in statuses]

@@ -279,6 +279,16 @@ Combine with `--dry-run` to see detailed output without sending email.
 - `python main.py --mgmt-summary --since 7d` — Team summary for the last 7 days
 - `python main.py --mgmt-summary --from 2026-05-01 --to 2026-05-29` — Team summary for an explicit date range
 
+### Page Watch Mode
+
+Reports what changed on a Confluence page and all pages below it in the last N days: changes per page, an overall summary that correlates the changes across pages, a change request (Änderungsantrag), a delta specification, open points and a rough effort estimate based on the overall picture. No state: every run looks at the window only. Needs a `page_watch` block in `config.yaml` (independent of `spec_monitor`); see `digest/config.yaml.example` and `docs/architecture/page-watch.md`.
+
+- `python main.py --page-watch --dry-run` — Run everything, write `<data_dir>/spec_cache/page-watch-preview.html` instead of sending
+- `python main.py --page-watch` — Send the report mail (the HTML is also kept as `<data_dir>/spec_cache/page-watch-latest.html`)
+- `python main.py --page-watch --days 30` — Other window than `page_watch.window_days` (default 14)
+- `python main.py --page-watch --publish-page` — Also create a Confluence page (empty effort fields) under `page_watch.confluence_page.parent_page_id`
+- Helper scripts in the repo root: `page-watch.bat` (standard run), `dryrun-page-watch.bat`; extra arguments are passed through
+
 ### Spec Source Monitor Mode
 
 Checks the sources pinned in the "Quellen" table of the Confluence detail specs and, for every spec whose sources changed, generates a change request (plain language) and a delta specification. Needs a `spec_monitor` block in `config.yaml` (optional `gitlab` block for repo documents); see `digest/config.yaml.example` and `docs/architecture/spec-monitor.md`.
