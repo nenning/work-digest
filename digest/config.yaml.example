@@ -184,7 +184,7 @@ data_dir: ~/.digest
 #     - name: application
 #       project: group/application       # full "group/project" path or numeric project id
 #       docs_folder: docs                # folder (or list: docs_folders: [docs, architecture]) searched for documents
-#       # local_path: C:\workpplication # optional local clone: the page-watch trace pass searches it first (finds what
+#       # local_path: C:/work/application  # optional local clone: the page-watch trace pass searches it first (finds what
 #                                          # exists; open merge requests and branches always come from the API)
 #       # default_branch: main
 #     - name: Diagramm-Repository        # text in a source row that selects this repository (default: the name)
