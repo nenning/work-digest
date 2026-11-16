@@ -290,3 +290,81 @@ def test_attachment_failure_exits_1_and_names_the_page_url(tmp_path, stubs, caps
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "https://x/page" in err and "HTTP 413" in err
+
+
+@pytest.mark.parametrize("argv", [
+    ["--page-watch-apply", "--page-watch"],
+    ["--page-watch-apply", "--spec-monitor"],
+    ["--page-watch-apply", "--create-ticket", "X"],
+    ["--page-watch-apply", "--update-spec"],
+    ["--page-watch-apply", "--mgmt-summary", "--since", "7d"],
+    ["--page-watch-apply", "--publish-page"],
+    ["--page-watch-apply", "--days", "7"],
+    ["--page-watch-apply", "--week", "KW44-2026"],
+    ["--page-watch-apply", "KW44-2026", "--spec-monitor"],
+    ["--page-watch-apply", "--spec", "X"],
+])
+def test_invalid_apply_flag_combinations_are_rejected(tmp_path, monkeypatch, argv):
+    with pytest.raises(SystemExit):
+        _main(monkeypatch, tmp_path, *argv)
+
+
+@pytest.mark.parametrize("argv,target", [
+    (["--page-watch-apply"], ""),
+    (["--page-watch-apply", "--dry-run"], ""),
+    (["--page-watch-apply", "KW44-2026"], "KW44-2026"),
+    (["--page-watch-apply", "12345", "--dry-run"], "12345"),
+    (["--page-watch-apply=https://x/wiki/spaces/A/pages/12/T"], "https://x/wiki/spaces/A/pages/12/T"),
+])
+def test_valid_apply_invocations_dispatch(tmp_path, monkeypatch, argv, target):
+    dispatch = _main(monkeypatch, tmp_path, *argv)
+    dispatch.assert_called_once()
+    assert dispatch.call_args[0][0].page_watch_apply == target
+
+
+def test_dispatch_routes_apply_before_page_watch(tmp_path, mocker):
+    run = mocker.patch.object(cli, "run_page_watch_apply_cli")
+    watch = mocker.patch.object(cli, "run_page_watch_cli")
+    cli._dispatch(SimpleNamespace(page_watch_apply="", page_watch=False, dry_run=False), _config(tmp_path),
+                  tmp_path / "t", "cmd")
+    run.assert_called_once()
+    watch.assert_not_called()
+
+
+def _apply(mocker, results=None, error=None, dry_run=False, target=""):
+    from digest.spec_monitor import page_watch_apply as pa
+    run = mocker.patch.object(pa, "run_apply", side_effect=error, return_value=results or [])
+    args = SimpleNamespace(page_watch_apply=target, dry_run=dry_run)
+    return run, args
+
+
+def test_apply_cli_exit_0_when_all_done_or_nothing_to_do(tmp_path, mocker, capsys):
+    from digest.spec_monitor.page_watch_apply import ApplyResult
+    run, args = _apply(mocker, [ApplyResult("Page Watch KW45 2026", done=["A: frozen: frozen"]), ApplyResult("x")],
+                       target="KW45-2026")
+    cli.run_page_watch_apply_cli(args, _config(tmp_path))
+    assert run.call_args.kwargs == {"target": "KW45-2026", "dry_run": False}
+    assert "2 report page(s), 1 action(s) done" in capsys.readouterr().out
+    cli.run_page_watch_apply_cli(_apply(mocker)[1], _config(tmp_path))
+
+
+def test_apply_cli_exit_1_on_fatal(tmp_path, mocker, capsys):
+    from digest.spec_monitor.page_watch_apply import ApplyFatal
+    _, args = _apply(mocker, error=ApplyFatal("no report page"))
+    with pytest.raises(SystemExit) as exc:
+        cli.run_page_watch_apply_cli(args, _config(tmp_path))
+    assert exc.value.code == 1 and "no report page" in capsys.readouterr().err
+
+
+def test_apply_cli_exit_2_when_an_action_failed(tmp_path, mocker, capsys):
+    from digest.spec_monitor.page_watch_apply import ApplyResult
+    _, args = _apply(mocker, [ApplyResult("p", done=["a"], failed=["B: ticket: Jira down"])])
+    with pytest.raises(SystemExit) as exc:
+        cli.run_page_watch_apply_cli(args, _config(tmp_path))
+    assert exc.value.code == 2 and "Jira down" in capsys.readouterr().err
+
+
+def test_apply_cli_passes_dry_run(tmp_path, mocker):
+    run, args = _apply(mocker, dry_run=True)
+    cli.run_page_watch_apply_cli(args, _config(tmp_path))
+    assert run.call_args.kwargs["dry_run"] is True
