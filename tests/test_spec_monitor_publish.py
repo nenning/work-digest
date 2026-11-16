@@ -178,3 +178,138 @@ def test_requests_use_configured_timeout(atlassian, monkeypatch):
     publish_page(atlassian, "Basic abc", RetryConfig(attempts=1, backoff_seconds=0, timeout_seconds=77),
                  "123", "T", "<p>x</p>", "m")
     assert api.calls and all(c[2]["timeout"] == 77 for c in api.calls)
+
+
+# ---- page-watch helpers: children, read / update, attachments ----
+
+H = {"Authorization": "Basic abc"}
+
+
+def _children_page(results, next_link=None):
+    return FakeResp(200, {"results": results, "_links": {"next": next_link} if next_link else {}})
+
+
+def test_publish_page_detailed_returns_id_and_url(atlassian, monkeypatch):
+    api = FakeApi(_base_routes())
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    page_id, url = publish.publish_page_detailed(atlassian, "Basic abc", RETRY, "123", "T", "<p>x</p>", "m")
+    assert page_id == "999" and url == "https://example.atlassian.net/wiki/spaces/RMEG/pages/999/Report"
+
+
+def test_list_child_pages_paginates(atlassian, monkeypatch):
+    first = f"{BASE}/content/123/child/page"
+    api = FakeApi({
+        ("GET", first): _children_page([{"id": "1", "title": "A"}], "/rest/api/content/123/child/page?cursor=2"),
+        ("GET", "https://example.atlassian.net/wiki/rest/api/content/123/child/page?cursor=2"):
+            _children_page([{"id": 2, "title": "B"}]),
+    })
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    assert publish.list_child_pages(atlassian, "Basic abc", RETRY, "123") == [
+        {"id": "1", "title": "A"}, {"id": "2", "title": "B"}]
+    assert api.calls[0][2]["params"]["limit"] == 100
+
+
+def test_find_child_page_hit_miss_and_case(atlassian, monkeypatch):
+    api = FakeApi({("GET", f"{BASE}/content/123/child/page"): _children_page(
+        [{"id": "7", "title": "Page Watch KW45 2026"}, {"id": "8", "title": "Other"}])})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    assert publish.find_child_page(atlassian, "Basic abc", RETRY, "123", "page watch kw45 2026") == "7"
+    assert publish.find_child_page(atlassian, "Basic abc", RETRY, "123", "Page Watch KW46 2026") is None
+
+
+def test_list_child_pages_failure_raises(atlassian, monkeypatch):
+    api = FakeApi({("GET", f"{BASE}/content/123/child/page"): FakeResp(403, text="no")})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    with pytest.raises(RuntimeError, match="403"):
+        publish.list_child_pages(atlassian, "Basic abc", RETRY, "123")
+
+
+def test_read_page_storage(atlassian, monkeypatch):
+    api = FakeApi({("GET", f"{BASE}/content/50"): FakeResp(200, {
+        "title": "Page Watch KW45 2026", "version": {"number": 4}, "body": {"storage": {"value": "<p>x</p>"}}})})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    assert publish.read_page_storage(atlassian, "Basic abc", RETRY, "50") == ("<p>x</p>", 4, "Page Watch KW45 2026")
+    assert api.calls[0][2]["params"] == {"expand": "body.storage,version"}
+
+
+def test_read_page_storage_404_raises_lookup_error(atlassian, monkeypatch):
+    monkeypatch.setattr(publish, "request_with_retry", FakeApi({("GET", f"{BASE}/content/50"): FakeResp(404)}))
+    with pytest.raises(LookupError):
+        publish.read_page_storage(atlassian, "Basic abc", RETRY, "50")
+
+
+def test_update_page_storage_increments_the_version(atlassian, monkeypatch):
+    api = FakeApi({("PUT", f"{BASE}/content/50"): FakeResp(200, {})})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    publish.update_page_storage(atlassian, "Basic abc", RETRY, "50", "T", "<p>y</p>", 4, "Page watch apply")
+    body = api.calls[0][2]["json"]
+    assert body["version"] == {"number": 5, "message": "Page watch apply"}
+    assert body["type"] == "page" and body["title"] == "T"
+    assert body["body"]["storage"] == {"value": "<p>y</p>", "representation": "storage"}
+
+
+def test_update_page_storage_conflict_raises_page_conflict(atlassian, monkeypatch):
+    api = FakeApi({("PUT", f"{BASE}/content/50"): FakeResp(409, text="conflict")})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    with pytest.raises(publish.PageConflict):
+        publish.update_page_storage(atlassian, "Basic abc", RETRY, "50", "T", "<p>y</p>", 4, "m")
+
+
+def test_update_page_storage_other_failure_raises_runtime_error(atlassian, monkeypatch):
+    api = FakeApi({("PUT", f"{BASE}/content/50"): FakeResp(403, text="no")})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    with pytest.raises(RuntimeError, match="403") as exc:
+        publish.update_page_storage(atlassian, "Basic abc", RETRY, "50", "T", "<p>y</p>", 4, "m")
+    assert not isinstance(exc.value, publish.PageConflict)
+
+
+def test_put_attachment_creates_when_absent(atlassian, monkeypatch):
+    att = f"{BASE}/content/50/child/attachment"
+    api = FakeApi({("GET", att): FakeResp(200, {"results": []}), ("POST", att): FakeResp(200, {"results": [{"id": "att1"}]})})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    publish.put_attachment(atlassian, "Basic abc", RETRY, "50", "page-watch-data.json", b"{}")
+    lookup, post = api.calls
+    assert lookup[2]["params"] == {"filename": "page-watch-data.json"}
+    assert post[2]["headers"]["X-Atlassian-Token"] == "no-check"
+    assert "Content-Type" not in post[2]["headers"]
+    name, content, ctype = post[2]["files"]["file"]
+    assert (name, content, ctype) == ("page-watch-data.json", b"{}", "application/json")
+
+
+def test_put_attachment_replaces_an_existing_one(atlassian, monkeypatch):
+    att = f"{BASE}/content/50/child/attachment"
+    api = FakeApi({
+        ("GET", att): FakeResp(200, {"results": [{"id": "att9", "title": "page-watch-data.json"}]}),
+        ("POST", f"{att}/att9/data"): FakeResp(200, {}),
+    })
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    publish.put_attachment(atlassian, "Basic abc", RETRY, "50", "page-watch-data.json", b"{}")
+    assert api.calls[1][1] == f"{att}/att9/data"
+
+
+def test_put_attachment_failure_raises(atlassian, monkeypatch):
+    att = f"{BASE}/content/50/child/attachment"
+    api = FakeApi({("GET", att): FakeResp(200, {"results": []}), ("POST", att): FakeResp(413, text="big")})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    with pytest.raises(RuntimeError, match="413"):
+        publish.put_attachment(atlassian, "Basic abc", RETRY, "50", "f.json", b"{}")
+
+
+def test_get_attachment_downloads_the_file(atlassian, monkeypatch):
+    att = f"{BASE}/content/50/child/attachment"
+    download = "https://example.atlassian.net/wiki/download/attachments/50/page-watch-data.json?version=2"
+    file_resp = FakeResp(200)
+    file_resp.content = b'{"a": 1}'
+    api = FakeApi({
+        ("GET", att): FakeResp(200, {"results": [{"id": "att9", "title": "page-watch-data.json",
+                                                   "_links": {"download": "/download/attachments/50/page-watch-data.json?version=2"}}]}),
+        ("GET", download): file_resp,
+    })
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    assert publish.get_attachment(atlassian, "Basic abc", RETRY, "50", "page-watch-data.json") == b'{"a": 1}'
+
+
+def test_get_attachment_returns_none_when_absent(atlassian, monkeypatch):
+    api = FakeApi({("GET", f"{BASE}/content/50/child/attachment"): FakeResp(200, {"results": []})})
+    monkeypatch.setattr(publish, "request_with_retry", api)
+    assert publish.get_attachment(atlassian, "Basic abc", RETRY, "50", "x.json") is None
