@@ -283,3 +283,49 @@ def test_trace_texts_are_escaped_and_unsafe_urls_dropped():
     for out in _both(_traced(PageTrace("FOUND", [ref], searched=["<s>"]))):
         assert "<b>x</b>" not in out and "<i>l</i>" not in out and "<s>" not in out
         assert "javascript:" not in out
+
+
+def _actions_report(**over):
+    from digest.spec_monitor import page_watch_data as pd
+    from digest.spec_monitor.week import parse_week
+    week = parse_week("KW44-2026", date(2026, 11, 15))
+    report = _report(week=week, window_start=week.start, window_end=week.end, **over)
+    report.pages[0].labels = ["frozen"]
+    report.pages[1].labels = []
+    return report, pd.build_data(report, "frozen")
+
+
+def test_storage_with_actions_has_task_boxes_per_page_and_hides_frozen_for_a_frozen_page():
+    report, data = _actions_report()
+    storage = pr.render_confluence_storage(report, actions=data)
+    for tid in (12, 13, 21, 22, 23):
+        assert f"<ac:task-id>{tid}</ac:task-id>" in storage, tid
+    assert "<ac:task-id>11</ac:task-id>" not in storage
+    assert "Jira-Ticket erstellen" in storage and "CR erstellen" in storage and "frozen page" in storage
+
+
+def test_task_boxes_come_after_the_hint_and_before_the_delta():
+    report, data = _actions_report(trace_enabled=True)
+    report.pages[0].trace = PageTrace("NONE", searched=["Jira PSSA"])
+    storage = pr.render_confluence_storage(report, actions=data)
+    assert storage.index("Keine Hinweise") < storage.index("<ac:task-id>12</ac:task-id>") < storage.index("Delta-Spezifikation")
+
+
+def test_english_task_labels():
+    report, data = _actions_report(language="en")
+    storage = pr.render_confluence_storage(report, actions=data)
+    assert "create Jira ticket" in storage and "create CR" in storage
+
+
+def test_done_actions_render_as_a_done_line():
+    report, data = _actions_report()
+    data.pages[0].actions["ticket"].status = "done"
+    data.pages[0].actions["ticket"].result = "PSSA-5"
+    storage = pr.render_confluence_storage(report, actions=data)
+    assert "<ac:task-id>12</ac:task-id>" not in storage and "PSSA-5" in storage
+
+
+def test_storage_without_actions_has_no_tasks():
+    report, _ = _actions_report()
+    assert "<ac:task" not in pr.render_confluence_storage(report)
+    assert "<ac:task" not in pr.render_mail_html(report)

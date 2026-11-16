@@ -11,6 +11,7 @@ from jinja2 import Environment, FileSystemLoader
 from digest.email_sender import TEMPLATES_DIR, _safe_url
 from digest.spec_monitor import report as base
 from digest.spec_monitor.models import PageChange, PageStatus, PageTrace, PageWatchReport, ReportError
+from digest.spec_monitor.page_watch_data import WatchData, render_tasks
 
 _DE: Dict[str, str] = dict(base._DE)
 _DE.update({
@@ -271,8 +272,9 @@ def render_mail_html(report: PageWatchReport) -> str:
     )
 
 
-def render_confluence_storage(report: PageWatchReport) -> str:
+def render_confluence_storage(report: PageWatchReport, *, actions: Optional[WatchData] = None) -> str:
     L = _labels(report)
+    entries = {p.page_id: p for p in actions.pages} if actions else {}
     e, a, table, td, macro, ul = base._e, base._a, base._table, base._td, base._macro, base._ul
     by_page, other = _deltas_by_page(report)
     errors = _all_errors(report)
@@ -308,6 +310,8 @@ def render_confluence_storage(report: PageWatchReport) -> str:
             parts.append(ul([e(p) for p in row["summary"]]))
         if row["trace"]:
             parts.append(_trace_storage(row["trace"], L))
+        if pc.page_id in entries:
+            parts.append(render_tasks(entries[pc.page_id], L))
         if row["detail"]:
             parts.append(macro("warning", ul([e(d) for d in row["detail"]])))
         delta = base._storage_delta(SimpleNamespace(delta_changes=by_page.get(pc.title, []), open_points=[]), L)

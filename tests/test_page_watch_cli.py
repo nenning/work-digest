@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from digest.spec_monitor import cli
 from digest.spec_monitor import page_watch_report as pr
 from digest.spec_monitor.models import PageChange, PageStatus, PageWatchReport, ReportError
 from digest.spec_monitor.runner import SpecMonitorFatal
+from digest.spec_monitor.week import parse_week
 
 
 def _config(tmp_path, publish_parent=None, recipient="me@example.com", page_watch=True):
@@ -32,8 +34,10 @@ def _args(**kw):
 
 def _report(errors=None):
     page = PageChange(page_id="10", title="Batch", url="https://x/10", status=PageStatus.CHANGED)
+    week = parse_week("KW44-2026", date(2026, 11, 15))
     return PageWatchReport(generated_at=datetime(2026, 11, 13, 8, 0).astimezone(), parent_title="Coremodul",
-                           window_start=date(2026, 10, 31), pages=[page], errors=errors or [])
+                           window_start=week.start, window_end=week.end, week=week, pages=[page],
+                           errors=errors or [])
 
 
 @pytest.fixture
@@ -41,7 +45,9 @@ def stubs(mocker):
     run = mocker.patch("digest.spec_monitor.page_watch.run_page_watch", return_value=_report())
     mocker.patch.object(cli, "get_auth_header", return_value="Basic x")
     mocker.patch.object(cli, "send_html_via_smtp", return_value=True)
-    mocker.patch.object(cli, "publish_page", return_value="https://x/page")
+    mocker.patch.object(cli, "find_child_page", return_value=None)
+    mocker.patch.object(cli, "publish_page_detailed", return_value=("999", "https://x/page"))
+    mocker.patch.object(cli, "put_attachment")
     return run
 
 
@@ -53,8 +59,24 @@ def test_dry_run_writes_only_the_preview_and_sends_nothing(tmp_path, stubs):
     assert (out / "page-watch-preview.confluence.html").exists()
     assert not (out / "page-watch-latest.html").exists()
     cli.send_html_via_smtp.assert_not_called()
-    cli.publish_page.assert_not_called()
+    cli.publish_page_detailed.assert_not_called()
+    cli.put_attachment.assert_not_called()
+    cli.find_child_page.assert_not_called()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["spec_cache"]
+
+
+def test_dry_run_with_publish_page_writes_the_data_preview_with_task_boxes(tmp_path, stubs):
+    cli.run_page_watch_cli(_args(dry_run=True, publish_page=True), _config(tmp_path, publish_parent="5"),
+                           tmp_path / "t", "cmd")
+    out = tmp_path / "spec_cache"
+    data = json.loads((out / "page-watch-preview.data.json").read_text(encoding="utf-8"))
+    assert data["week_label"] == "KW44 2026" and data["pages"][0]["page_id"] == "10"
+    assert "<ac:task-id>12</ac:task-id>" in (out / "page-watch-preview.confluence.html").read_text(encoding="utf-8")
+
+
+def test_dry_run_without_publish_page_writes_no_data_preview(tmp_path, stubs):
+    cli.run_page_watch_cli(_args(dry_run=True), _config(tmp_path, publish_parent="5"), tmp_path / "t", "cmd")
+    assert not (tmp_path / "spec_cache" / "page-watch-preview.data.json").exists()
 
 
 def test_run_passes_days_and_command_line(tmp_path, stubs):
@@ -67,7 +89,8 @@ def test_sends_mail_and_keeps_the_html(tmp_path, stubs):
     args = cli.send_html_via_smtp.call_args[0]
     assert args[0].startswith("[Digest] 13.11.2026: 1") and args[3] == "me@example.com"
     assert (tmp_path / "spec_cache" / "page-watch-latest.html").read_text(encoding="utf-8") == args[1]
-    cli.publish_page.assert_not_called()
+    cli.publish_page_detailed.assert_not_called()
+    cli.find_child_page.assert_not_called()
 
 
 def test_recipient_falls_back_to_email_recipient(tmp_path, stubs):
@@ -87,7 +110,7 @@ def test_publish_page_needs_a_parent_and_runs_after_the_mail(tmp_path, stubs):
     with pytest.raises(ValueError, match="confluence_page"):
         cli.run_page_watch_cli(_args(publish_page=True), _config(tmp_path), tmp_path / "t", "cmd")
     cli.run_page_watch_cli(_args(publish_page=True), _config(tmp_path, publish_parent="5"), tmp_path / "t", "cmd")
-    assert cli.publish_page.call_args[0][3] == "5"
+    assert cli.publish_page_detailed.call_args[0][3] == "5"
 
 
 def test_delivery_failure_exits_1_and_keeps_no_latest_file(tmp_path, stubs):
@@ -204,7 +227,7 @@ def test_publish_is_refused_for_a_rolling_window(tmp_path, stubs, kw):
     with pytest.raises(ValueError, match="calendar week"):
         cli.run_page_watch_cli(_args(publish_page=True, days=kw.get("days")), config, tmp_path / "t", "cmd")
     stubs.assert_not_called()
-    cli.publish_page.assert_not_called()
+    cli.publish_page_detailed.assert_not_called()
 
 
 def test_publish_is_allowed_for_the_default_week_and_for_an_explicit_week(tmp_path, stubs):
@@ -212,4 +235,58 @@ def test_publish_is_allowed_for_the_default_week_and_for_an_explicit_week(tmp_pa
     cli.run_page_watch_cli(_args(publish_page=True), config, tmp_path / "t", "cmd")
     config.page_watch.window_days = 14
     cli.run_page_watch_cli(_args(publish_page=True, week="KW44-2026"), config, tmp_path / "t", "cmd")
-    assert cli.publish_page.call_count == 2
+    assert cli.publish_page_detailed.call_count == 2
+
+
+def test_weekly_publish_creates_the_page_with_boxes_then_uploads_the_attachment(tmp_path, stubs):
+    calls = []
+    cli.send_html_via_smtp.side_effect = lambda *a, **k: calls.append("mail") or True
+    cli.find_child_page.side_effect = lambda *a, **k: calls.append("find")
+    cli.publish_page_detailed.side_effect = lambda *a, **k: calls.append("page") or ("999", "https://x/page")
+    cli.put_attachment.side_effect = lambda *a, **k: calls.append("attachment")
+    cli.run_page_watch_cli(_args(publish_page=True), _config(tmp_path, publish_parent="5"), tmp_path / "t", "cmd")
+    assert calls == ["mail", "find", "page", "attachment"]
+    assert cli.find_child_page.call_args[0][3:] == ("5", "Page Watch KW44 2026")
+    page_args = cli.publish_page_detailed.call_args[0]
+    assert page_args[3] == "5" and page_args[4] == "Page Watch KW44 2026"
+    assert "<ac:task-id>13</ac:task-id>" in page_args[5]
+    att = cli.put_attachment.call_args[0]
+    assert att[3] == "999" and att[4] == "page-watch-data.json"
+    data = json.loads(att[5].decode("utf-8"))
+    assert data["week_tag"] == "2026W44" and data["pages"][0]["actions"]["ticket"]["status"] == "pending"
+
+
+def test_existing_week_page_refuses_the_publish_and_creates_nothing(tmp_path, stubs, capsys):
+    cli.find_child_page.return_value = "777"
+    with pytest.raises(SystemExit) as exc:
+        cli.run_page_watch_cli(_args(publish_page=True), _config(tmp_path, publish_parent="5"), tmp_path / "t", "cmd")
+    assert exc.value.code == 1
+    cli.publish_page_detailed.assert_not_called()
+    cli.put_attachment.assert_not_called()
+    err = capsys.readouterr().err
+    assert "Page Watch KW44 2026" in err and "already exists" in err
+
+
+def test_lookup_failure_exits_1_without_creating_a_page(tmp_path, stubs):
+    cli.find_child_page.side_effect = RuntimeError("HTTP 500")
+    with pytest.raises(SystemExit) as exc:
+        cli.run_page_watch_cli(_args(publish_page=True), _config(tmp_path, publish_parent="5"), tmp_path / "t", "cmd")
+    assert exc.value.code == 1
+    cli.publish_page_detailed.assert_not_called()
+
+
+def test_page_creation_failure_exits_1_and_uploads_nothing(tmp_path, stubs):
+    cli.publish_page_detailed.side_effect = RuntimeError("HTTP 400")
+    with pytest.raises(SystemExit) as exc:
+        cli.run_page_watch_cli(_args(publish_page=True), _config(tmp_path, publish_parent="5"), tmp_path / "t", "cmd")
+    assert exc.value.code == 1
+    cli.put_attachment.assert_not_called()
+
+
+def test_attachment_failure_exits_1_and_names_the_page_url(tmp_path, stubs, capsys):
+    cli.put_attachment.side_effect = RuntimeError("HTTP 413")
+    with pytest.raises(SystemExit) as exc:
+        cli.run_page_watch_cli(_args(publish_page=True), _config(tmp_path, publish_parent="5"), tmp_path / "t", "cmd")
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "https://x/page" in err and "HTTP 413" in err

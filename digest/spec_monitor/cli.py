@@ -1,4 +1,5 @@
 """CLI delivery of a spec-monitor run: preview, mail, optional Confluence page."""
+import json
 import logging
 import sys
 from datetime import date
@@ -12,7 +13,7 @@ from digest.config import Config
 from digest.email_sender import send_html_via_com, send_html_via_smtp
 from digest.spec_monitor import refcheck_report as ref_report
 from digest.spec_monitor.models import RefCheckReport, RunReport
-from digest.spec_monitor.publish import publish_page
+from digest.spec_monitor.publish import find_child_page, publish_page, publish_page_detailed, put_attachment
 from digest.spec_monitor.refcheck import run_reference_check
 from digest.spec_monitor.report import _problem_count, build_subject, render_confluence_storage, render_mail_html
 from digest.spec_monitor.runner import SpecMonitorFatal, run_spec_monitor
@@ -113,6 +114,7 @@ def run_page_watch_cli(args, config: Config, cache_file: Path, command_line: str
     of the report is also kept as `<data_dir>/spec_cache/page-watch-latest.html` after a delivered run."""
     from digest.spec_monitor import page_watch_report as watch_report
     from digest.spec_monitor.page_watch import run_page_watch
+    from digest.spec_monitor.page_watch_data import ATTACHMENT_NAME, build_data, to_json
 
     pw = config.page_watch
     if pw is None:
@@ -153,9 +155,12 @@ def run_page_watch_cli(args, config: Config, cache_file: Path, command_line: str
         (out_dir / "page-watch-preview.html").write_text(_with_statistics(html_body), encoding="utf-8")
         print(f"Preview written to {out_dir / 'page-watch-preview.html'}")
         if args.publish_page:
+            data = build_data(report, pw.freeze_label)
             (out_dir / "page-watch-preview.confluence.html").write_text(
-                watch_report.render_confluence_storage(report), encoding="utf-8")
-            print(f"Confluence page preview written to {out_dir / 'page-watch-preview.confluence.html'} (not published)")
+                watch_report.render_confluence_storage(report, actions=data), encoding="utf-8")
+            (out_dir / "page-watch-preview.data.json").write_text(to_json(data), encoding="utf-8")
+            print(f"Confluence page preview written to {out_dir / 'page-watch-preview.confluence.html'} "
+                  f"(data: {out_dir / 'page-watch-preview.data.json'}; not published)")
         _exit_on_watch_problems(report)
         return
 
@@ -167,14 +172,26 @@ def run_page_watch_cli(args, config: Config, cache_file: Path, command_line: str
     print(f"Report kept as {out_dir / 'page-watch-latest.html'}")
 
     if args.publish_page:
-        title = f"Seitenänderungen {report.parent_title} {report.generated_at.strftime('%Y-%m-%d %H:%M')}"
+        title = report.week.title
         try:
-            url = publish_page(
-                config.atlassian, get_auth_header(config.atlassian), pw.retry, pw.publish_parent_page_id,
-                title, watch_report.render_confluence_storage(report), "Page watch run",
+            data = build_data(report, pw.freeze_label)
+            auth = get_auth_header(config.atlassian)
+            if find_child_page(config.atlassian, auth, pw.retry, pw.publish_parent_page_id, title):
+                print(f"ERROR: Confluence page '{title}' already exists below page {pw.publish_parent_page_id}; "
+                      "nothing was published. Delete that page or continue with it.", file=sys.stderr)
+                raise SystemExit(1)
+            page_id, url = publish_page_detailed(
+                config.atlassian, auth, pw.retry, pw.publish_parent_page_id, title,
+                watch_report.render_confluence_storage(report, actions=data), "Page watch run",
             )
         except Exception as exc:
             print(f"ERROR: Confluence page could not be published: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            put_attachment(config.atlassian, auth, pw.retry, page_id, ATTACHMENT_NAME, to_json(data).encode("utf-8"))
+        except Exception as exc:
+            print(f"ERROR: Confluence page {url} was created but its data attachment could not be stored: {exc} "
+                  "(the apply step cannot use this page; delete it and run again)", file=sys.stderr)
             raise SystemExit(1)
         print(f"Confluence page: {url}")
 
