@@ -52,13 +52,11 @@ _DE.update({
     "intro_title": "Über diese Seite",
     "intro_shows": "Diese Seite zeigt, was sich im genannten Zeitraum auf den überwachten Spezifikationsseiten geändert hat: "
                    "pro geänderter oder neuer Seite eine Kurzfassung der Änderung mit den zugehörigen Delta-Punkten, "
-                   "am Ende eine Gesamtzusammenfassung mit Änderungsantrag, offenen Punkten und einer groben Aufwandsschätzung "
-                   "(KI-generiert, bitte prüfen; die Aufwandsfelder sind bewusst leer).",
+                   "am Ende eine Gesamtzusammenfassung mit Änderungsantrag und offenen Punkten.",
     "intro_trace": "Unter jeder Seite steht ein Hinweis, ob in Jira oder im Quellcode Spuren gefunden wurden, dass die Änderung "
                    "bereits in Arbeit oder umgesetzt ist (höchstens 3 Verweise). Das sind Hinweise, kein Beweis.",
-    "intro_boxes": "Die Checkboxen unter jeder Seite lösen noch nichts aus. Erst der Befehl --page-watch-apply wertet die "
-                   "angekreuzten Boxen aus; danach erscheinen sie als erledigte Zeilen:",
-    "intro_box_reject": "Änderung ablehnen: nur eine Markierung für das Team. Es passiert nichts damit.",
+    "intro_boxes": "Die Checkboxen unter jeder Seite werden benutzt, um Änderungen zu markieren:",
+    "intro_box_reject": "Änderung ablehnen: die Änderung müsste zurückgebaut werden.",
     "intro_box_frozen": "frozen page: setzt das Label frozen auf der Spezifikationsseite (nur sichtbar, wenn die Seite es noch nicht hat).",
     "intro_box_ticket": "Jira-Ticket erstellen: legt ein Ticket mit der Delta-Spezifikation dieser Seite und Woche an.",
     "intro_box_cr": "CR erstellen: nimmt die Seite in die lokale CR-Datei der Woche auf (Grundlage für ein späteres gemeinsames CR-Ticket).",
@@ -107,13 +105,11 @@ _EN.update({
     "intro_title": "About this page",
     "intro_shows": "This page shows what changed on the watched specification pages in the given window: for every changed or "
                    "new page a short summary of the change with its delta items, and at the end an overall summary with "
-                   "change request, open points and a rough effort estimate (AI-generated, please verify; the effort "
-                   "fields are intentionally empty).",
+                   "change request and open points.",
     "intro_trace": "Below each page a hint says whether Jira or the source code show traces that the change is already in "
                    "progress or done (at most 3 references). These are hints, not proof.",
-    "intro_boxes": "The checkboxes below each page do not trigger anything yet. Only the command --page-watch-apply "
-                   "evaluates the ticked boxes; afterwards they show up as done lines:",
-    "intro_box_reject": "reject change: only a marker for the team. Nothing is done with it.",
+    "intro_boxes": "The checkboxes below each page are used to mark changes:",
+    "intro_box_reject": "reject change: the change would have to be reverted.",
     "intro_box_frozen": "frozen page: sets the label frozen on the specification page (only shown if the page does not have it yet).",
     "intro_box_ticket": "create Jira ticket: creates a ticket with the delta specification of this page and week.",
     "intro_box_cr": "create CR: adds the page to the local CR file of the week (basis for a combined CR ticket later).",

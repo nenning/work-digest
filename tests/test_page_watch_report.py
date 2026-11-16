@@ -339,17 +339,20 @@ def test_confluence_intro_explains_the_page_and_the_boxes():
     report = _report(week=week, window_start=week.start, window_end=week.end, trace_enabled=True)
     storage = pr.render_confluence_storage(report, actions=build_data(report, "frozen"))
     assert storage.count('ac:name="info"') == 1
-    for text in ("Über diese Seite", "Diese Seite zeigt", "Hinweise, kein Beweis", "--page-watch-apply",
-                 "Änderung ablehnen: nur eine Markierung", "frozen page: setzt das Label", "Jira-Ticket erstellen: legt",
-                 "CR erstellen: nimmt"):
+    for text in ("Über diese Seite", "Diese Seite zeigt", "Hinweise, kein Beweis",
+                 "werden benutzt, um Änderungen zu markieren",
+                 "Änderung ablehnen: die Änderung müsste zurückgebaut werden", "frozen page: setzt das Label",
+                 "Jira-Ticket erstellen: legt", "CR erstellen: nimmt"):
         assert text in storage
+    for text in ("Aufwandsschätzung", "KI-generiert", "lösen noch nichts aus", "nur eine Markierung"):
+        assert text not in storage.split("<h2>")[0]
     assert storage.index('ac:name="info"') < storage.index("<h2>")
 
 
 def test_confluence_intro_without_boxes_and_without_trace_stays_short():
     storage = pr.render_confluence_storage(_report())
     assert "Diese Seite zeigt" in storage
-    assert "--page-watch-apply" not in storage and "Hinweise, kein Beweis" not in storage
+    assert "Checkboxen" not in storage and "Hinweise, kein Beweis" not in storage
 
 
 def test_confluence_intro_in_english():
@@ -358,7 +361,8 @@ def test_confluence_intro_in_english():
     week = parse_week("KW44-2026", date(2026, 11, 15))
     report = _report(week=week, window_start=week.start, window_end=week.end, language="en")
     storage = pr.render_confluence_storage(report, actions=build_data(report, "frozen"))
-    assert "About this page" in storage and "reject change: only a marker" in storage
+    assert "About this page" in storage and "reject change: the change would have to be reverted" in storage
+    assert "effort estimate" not in storage.split("<h2>")[0]
     assert "Über diese Seite" not in storage
 
 

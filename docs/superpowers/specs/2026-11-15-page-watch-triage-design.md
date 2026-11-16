@@ -169,7 +169,7 @@ Changes:
   with a clear error (exit 1, nothing overwritten, nothing lost); the user deletes the page or goes on with the
   existing one. `--dry-run` writes `page-watch-preview.confluence.html` as before.
 - Per changed / new page, under the hint, up to four task-list items (storage format `ac:task-list`); the first,
-  `reject change` (task id `index*10+4`), is only a marker for the reviewers: the apply step ignores it, it is never
+  `reject change` (task id `index*10+4`), only marks a change that would have to be reverted: the apply step ignores it, it is never
   stored in the data attachment and nothing is done with it:
   - `frozen page` — omitted when the page already carries the freeze label (including pages with trace status
     `FROZEN`);

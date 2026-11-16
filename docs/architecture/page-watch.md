@@ -82,7 +82,7 @@ local checkout can miss recent work.
 `--publish-page` (weekly runs only) creates `Page Watch KW45 2026` under `page_watch.confluence_page.parent_page_id`
 after the mail was sent. An existing page of that week is never overwritten (exit 1, nothing created). Per changed
 page the page carries task-list boxes (task id = page index * 10 + 1 frozen, 2 ticket, 3 CR, 4 reject):
-`reject change` (first, a marker for the reviewers only; ignored by the apply step and not stored in the data),
+`reject change` (first, marks a change that would have to be reverted; ignored by the apply step and not stored in the data),
 `frozen page` (hidden when the page already has the label), `create Jira ticket`, `create CR`. The attachment
 `page-watch-data.json` (`page_watch_data.py`, schema version 1) holds per page the summary, delta items, open points,
 trace result and the status of every action (`pending` / `done` / `failed`).
