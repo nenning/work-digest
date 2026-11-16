@@ -76,3 +76,10 @@ def test_window_days_is_optional():
     assert _load_page_watch({"parent_page_id": "1"}).window_days is None
     assert _load_page_watch({"parent_page_id": "1", "window_days": None}).window_days is None
     assert _load_page_watch({"parent_page_id": "1", "window_days": 14}).window_days == 14
+
+
+def test_freeze_label_default_and_override():
+    assert _load_page_watch({"parent_page_id": "1"}).freeze_label == "frozen"
+    assert _load_page_watch({"parent_page_id": "1", "freeze_label": " eingefroren "}).freeze_label == "eingefroren"
+    with pytest.raises(ValueError, match="freeze_label"):
+        _load_page_watch({"parent_page_id": "1", "freeze_label": "  "})

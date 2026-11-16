@@ -125,6 +125,18 @@ class ConfluenceClient:
             for r in raw
         ]
 
+    def get_labels(self, page_id: str) -> List[str]:
+        raw = self._paginate(f"{self._api}/content/{page_id}/label", {"limit": 200}, f"labels of page {page_id}")
+        return [r["name"] for r in raw if r.get("name")]
+
+    def add_label(self, page_id: str, label: str) -> None:
+        url = f"{self._api}/content/{page_id}/label"
+        resp = request_with_retry(
+            "POST", url, retry=self._retry, headers={**self._headers(), "Content-Type": "application/json"},
+            json=[{"prefix": "global", "name": label}],
+        )
+        self._check(resp, url, f"page {page_id}")
+
     def get_page(self, page_id: str, with_body: bool = True) -> dict:
         expand = "version,history" + (",body.storage" if with_body else "") + ",ancestors"
         url = f"{self._api}/content/{page_id}"

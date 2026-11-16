@@ -276,6 +276,7 @@ class PageChange:
     summary_failed: str = ""                         # reason, when the per-page LLM summary failed
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    labels: Optional[List[str]] = None               # None = could not be read
 
 
 @dataclass

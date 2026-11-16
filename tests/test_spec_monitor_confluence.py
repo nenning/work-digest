@@ -69,6 +69,43 @@ def test_list_versions_paginates_and_sorts(tmp_path, patch_http):
     assert calls[0][2]["headers"]["Authorization"] == "Basic abc"
 
 
+def test_get_labels_paginates_and_returns_names(tmp_path, patch_http):
+    def router(method, url, kwargs):
+        if "cursor=2" in url:
+            return FakeResp(data={"results": [{"name": "x"}], "_links": {}})
+        return FakeResp(data={"results": [{"name": "frozen"}, {"prefix": "global"}],
+                              "_links": {"next": "/rest/api/content/5/label?limit=200&cursor=2"}})
+
+    client, calls, fake = make_client(tmp_path, router)
+    patch_http(fake)
+    assert client.get_labels("5") == ["frozen", "x"]
+    assert calls[0][1] == "https://x.atlassian.net/wiki/rest/api/content/5/label"
+
+
+def test_add_label_posts_the_exact_body(tmp_path, patch_http):
+    client, calls, fake = make_client(tmp_path, lambda m, u, k: FakeResp(data={"results": [{"name": "frozen"}]}))
+    patch_http(fake)
+    client.add_label("5", "frozen")
+    method, url, kwargs = calls[0]
+    assert method == "POST" and url == "https://x.atlassian.net/wiki/rest/api/content/5/label"
+    assert kwargs["json"] == [{"prefix": "global", "name": "frozen"}]
+    assert kwargs["headers"]["Content-Type"] == "application/json"
+
+
+def test_add_label_on_a_missing_page_raises_lookup_error(tmp_path, patch_http):
+    client, _, fake = make_client(tmp_path, lambda m, u, k: FakeResp(status=404))
+    patch_http(fake)
+    with pytest.raises(LookupError):
+        client.add_label("5", "frozen")
+
+
+def test_add_label_failure_raises_request_failed(tmp_path, patch_http):
+    client, _, fake = make_client(tmp_path, lambda m, u, k: FakeResp(status=403))
+    patch_http(fake)
+    with pytest.raises(RequestFailed):
+        client.add_label("5", "frozen")
+
+
 def test_get_body_second_call_hits_cache(tmp_path, patch_http):
     def router(method, url, kwargs):
         return FakeResp(data={"body": {"storage": {"value": "<p>hi</p>"}}})

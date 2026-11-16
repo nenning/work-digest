@@ -43,6 +43,15 @@ class FakeClient:
         self.parent_when = parent_when or _iso(date(2026, 1, 1))
         self.bodies = {}
         self.fail_search = None
+        self.labels = {}
+        self.label_calls = []
+
+    def get_labels(self, pid):
+        self.label_calls.append(pid)
+        value = self.labels.get(pid, [])
+        if isinstance(value, Exception):
+            raise value
+        return value
 
     def get_page(self, pid, with_body=True):
         if pid == "1":
@@ -354,3 +363,35 @@ def test_weekly_synthesis_label_names_the_week(tmp_path, llm):
     client.versions["A"] = [_vp(1, date(2026, 10, 1)), _vp(2, date(2026, 11, 5))]
     _week_run(_config(tmp_path, window_days=None), client)
     assert llm.call_args.args[1] == "2026-11-02 to 2026-11-08 (KW45 2026)"
+
+
+def test_labels_are_read_for_changed_and_new_pages_only(tmp_path):
+    client = FakeClient([_entry("A", date(2026, 11, 5)), _entry("N", date(2026, 11, 9)), _entry("U", date(2026, 10, 1))])
+    client.versions["A"] = [_vp(1, date(2026, 10, 1)), _vp(2, date(2026, 11, 5))]
+    client.versions["N"] = [_vp(1, date(2026, 11, 9))]
+    client.labels = {"A": ["frozen"], "N": ["x"]}
+    report = _run(_config(tmp_path), client)
+    assert sorted(client.label_calls) == ["A", "N"]
+    assert next(p for p in report.pages if p.page_id == "A").labels == ["frozen"]
+    assert next(p for p in report.pages if p.page_id == "U").labels is None
+
+
+def test_unreadable_labels_are_a_reported_problem_and_the_page_stays_changed(tmp_path):
+    client = FakeClient([_entry("A", date(2026, 11, 5))])
+    client.versions["A"] = [_vp(1, date(2026, 10, 1)), _vp(2, date(2026, 11, 5))]
+    client.labels = {"A": RequestFailed("u", 3, "HTTP 500")}
+    report = _run(_config(tmp_path), client)
+    page = next(p for p in report.pages if p.page_id == "A")
+    assert page.status == PageStatus.CHANGED and page.labels is None
+    assert any("labels unreadable" in m and "HTTP 500" in m for m in page.errors)
+    assert any(e.scope == "A" and "labels unreadable" in e.message for e in report.errors)
+
+
+def test_is_frozen_is_case_insensitive_and_unknown_labels_are_not_frozen():
+    from digest.spec_monitor.models import PageChange
+    page = PageChange(page_id="1", title="t", url="u", status=PageStatus.CHANGED)
+    assert page_watch.is_frozen(page, "frozen") is False
+    page.labels = ["Other", "FROZEN"]
+    assert page_watch.is_frozen(page, "frozen") is True
+    page.labels = ["other"]
+    assert page_watch.is_frozen(page, "frozen") is False

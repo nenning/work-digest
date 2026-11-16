@@ -30,6 +30,10 @@ _CLASSIFICATION_TO_STATUS = {
 }
 
 
+def is_frozen(change: PageChange, freeze_label: str) -> bool:
+    return any(l.casefold() == freeze_label.casefold() for l in (change.labels or []))
+
+
 def baseline_day(window_days: int, today: Optional[date] = None) -> date:
     """Last day before the window: a page's old state is its last version at or before the end of this day."""
     return (today or date.today()) - timedelta(days=window_days)
@@ -120,6 +124,7 @@ class _PageWatch:
         change.status = PageStatus.NEW
         change.result = result
         change.warnings.extend(result.warnings)
+        self._read_labels(change)
         self._summarise(change)
 
     def _changed_page(self, change: PageChange, entry: dict) -> None:
@@ -135,7 +140,16 @@ class _PageWatch:
             change.errors.extend(result.errors or ["error"])
             return
         if change.status == PageStatus.CHANGED:
+            self._read_labels(change)
             self._summarise(change)
+
+    def _read_labels(self, change: PageChange) -> None:
+        try:
+            change.labels = self.client.get_labels(change.page_id)
+        except RequestFailed as exc:
+            change.errors.append(f"labels unreadable: {exc.last_error}; the freeze state of the page is unknown")
+        except LookupError as exc:
+            change.errors.append(f"labels unreadable: {exc}; the freeze state of the page is unknown")
 
     def _summarise(self, change: PageChange) -> None:
         result = change.result

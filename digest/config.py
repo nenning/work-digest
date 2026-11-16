@@ -228,6 +228,7 @@ class PageWatchConfig:
     llm_timeout: int = 240
     retry: RetryConfig = field(default_factory=RetryConfig)
     publish_parent_page_id: Optional[str] = None   # confluence_page.parent_page_id
+    freeze_label: str = "frozen"                   # pages with this label are not checked and cannot be frozen again
 
 
 @dataclass
@@ -325,6 +326,9 @@ def _load_page_watch(raw: Optional[dict]) -> Optional[PageWatchConfig]:
     if retry.timeout_seconds <= 0:
         raise ValueError("page_watch.retry.timeout_seconds must be positive")
     publish = (raw.get("confluence_page") or {}).get("parent_page_id")
+    freeze_label = str(raw.get("freeze_label", "frozen")).strip()
+    if not freeze_label:
+        raise ValueError("page_watch.freeze_label must not be blank")
     return PageWatchConfig(
         parent_page_id=str(parent),
         window_days=(_positive_int(raw["window_days"], "page_watch.window_days")
@@ -336,6 +340,7 @@ def _load_page_watch(raw: Optional[dict]) -> Optional[PageWatchConfig]:
         llm_timeout=_positive_int(raw.get("llm_timeout", 240), "page_watch.llm_timeout"),
         retry=retry,
         publish_parent_page_id=str(publish) if publish else None,
+        freeze_label=freeze_label,
     )
 
 
