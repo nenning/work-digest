@@ -13,7 +13,8 @@ from digest.spec_monitor.page_watch import is_frozen
 SCHEMA_VERSION = 1
 ACTIONS = ("frozen", "ticket", "cr")
 ATTACHMENT_NAME = "page-watch-data.json"
-_ACTION_CODE = {"frozen": 1, "ticket": 2, "cr": 3}
+REJECT = "reject"
+_ACTION_CODE = {"frozen": 1, "ticket": 2, "cr": 3, REJECT: 4}
 _CODE_ACTION = {v: k for k, v in _ACTION_CODE.items()}
 
 
@@ -138,7 +139,10 @@ def _done_line(state: ActionState, labels: Dict[str, str]) -> str:
 
 def render_tasks(entry: PageEntry, labels: Dict[str, str]) -> str:
     link = f'<a href="{html.escape(entry.url, quote=True)}">{html.escape(entry.title, quote=False)}</a>'
-    tasks: List[str] = []
+    tasks: List[str] = [
+        f"<ac:task><ac:task-id>{task_id(entry.index, REJECT)}</ac:task-id>"
+        f"<ac:task-status>incomplete</ac:task-status>"
+        f"<ac:task-body>{html.escape(labels[REJECT], quote=False)}: {link}</ac:task-body></ac:task>"]
     lines: List[str] = []
     for action in ACTIONS:
         state = entry.actions.get(action)
@@ -151,7 +155,7 @@ def render_tasks(entry: PageEntry, labels: Dict[str, str]) -> str:
                 f"<ac:task><ac:task-id>{task_id(entry.index, action)}</ac:task-id>"
                 f"<ac:task-status>incomplete</ac:task-status>"
                 f"<ac:task-body>{html.escape(labels[action], quote=False)}: {link}</ac:task-body></ac:task>")
-    task_list = f"<ac:task-list>{''.join(tasks)}</ac:task-list>" if tasks else ""
+    task_list = f"<ac:task-list>{''.join(tasks)}</ac:task-list>"
     return "".join(lines) + task_list
 
 

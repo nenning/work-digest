@@ -281,13 +281,17 @@ Combine with `--dry-run` to see detailed output without sending email.
 
 ### Page Watch Mode
 
-Reports what changed on a Confluence page and all pages below it in the last N days: changes per page, an overall summary that correlates the changes across pages, a change request (Änderungsantrag), a delta specification, open points and a rough effort estimate based on the overall picture. No state: every run looks at the window only. Needs a `page_watch` block in `config.yaml` (independent of `spec_monitor`); see `digest/config.yaml.example` and `docs/architecture/page-watch.md`.
+Reports what changed on a Confluence page and all pages below it in the previous calendar week (Mon-Sun): changes per page, an overall summary that correlates the changes across pages, a change request (Änderungsantrag), a delta specification, open points and a rough effort estimate based on the overall picture. Per changed page a hint says whether Jira or the source code show traces that the change is already in progress or done (at most 3 references; pages with the `frozen` label are skipped). No state: every run looks at the window only. Needs a `page_watch` block in `config.yaml` (independent of `spec_monitor`); see `digest/config.yaml.example` and `docs/architecture/page-watch.md`.
 
 - `python main.py --page-watch --dry-run` — Run everything, write `<data_dir>/spec_cache/page-watch-preview.html` instead of sending
-- `python main.py --page-watch` — Send the report mail (the HTML is also kept as `<data_dir>/spec_cache/page-watch-latest.html`)
-- `python main.py --page-watch --days 30` — Other window than `page_watch.window_days` (default 14)
-- `python main.py --page-watch --publish-page` — Also create a Confluence page (empty effort fields) under `page_watch.confluence_page.parent_page_id`
-- Helper scripts in the repo root: `page-watch.bat` (standard run), `dryrun-page-watch.bat`; extra arguments are passed through
+- `python main.py --page-watch` — Send the report mail for the previous calendar week (the HTML is also kept as `<data_dir>/spec_cache/page-watch-latest.html`)
+- `python main.py --page-watch --week KW44-2026` — A specific calendar week (e.g. after a missed run)
+- `python main.py --page-watch --days 30` — A rolling window of 30 days up to now instead of a calendar week (`page_watch.window_days` does the same by default); not publishable
+- `python main.py --page-watch --publish-page` — Also create the Confluence page `Page Watch KW45 2026` (empty effort fields) under `page_watch.confluence_page.parent_page_id`, with up to four checkboxes per changed page: `reject change` (first; only a marker for the reviewers, the apply step never acts on it), `frozen page` (hidden for pages that already have the label), `create Jira ticket`, `create CR`. An existing page of that week is never overwritten
+- `python main.py --page-watch-apply [KW45-2026 | page id or URL]` — Acts on the ticked boxes: sets the `frozen` label, creates one Jira ticket per page and week (delta specification), writes `<data_dir>/page_watch/CR-2026-KW45.md` collecting all pages with a ticked `create CR` box. Without an argument it processes every report page of the last 8 weeks that has ticked boxes; done boxes are rewritten as done lines, so a second run never creates duplicates. `--dry-run` shows what would be done
+- Needs write access for the Atlassian token (page labels, pages and attachments, issues; with `auth_type: scoped` the corresponding write scopes)
+- Suggested schedule: `--page-watch --publish-page` on Monday morning, `--page-watch-apply` daily or after the review
+- Helper scripts in the repo root: `page-watch.bat`, `dryrun-page-watch.bat`, `page-watch-apply.bat`, `dryrun-page-watch-apply.bat`; extra arguments are passed through
 
 ### Spec Source Monitor Mode
 

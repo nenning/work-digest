@@ -14,7 +14,7 @@ from digest.spec_monitor.ticket import TicketDraft, TicketResult
 from digest.spec_monitor.week import _week
 
 TODAY = date(2026, 11, 16)
-LABELS = {"frozen": "frozen page", "ticket": "create Jira ticket", "cr": "create CR", "done": "done"}
+LABELS = {"reject": "reject change", "frozen": "frozen page", "ticket": "create Jira ticket", "cr": "create CR", "done": "done"}
 BASE = "https://example.atlassian.net"
 
 
@@ -135,6 +135,20 @@ def env(mocker, tmp_path):
 
 def _writes(env):
     return env.updates or env.attachment_puts or env.created or any(c.labels for c in FakeClient.instances)
+
+
+def test_ticked_reject_box_is_ignored_and_stays_ticked(env):
+    env.add("100", _data(), ticked=[14, 24])
+    (res,) = env.run("")
+    assert res.done == [] and res.failed == [] and res.skipped == 0
+    assert not _writes(env)
+    env.find.assert_not_called()
+
+
+def test_reject_ticked_next_to_an_action_does_not_change_that_action(env):
+    env.add("100", _data(), ticked=[14, 11])
+    (res,) = env.run("")
+    assert env.client().labels == [("10", "frozen")] and res.failed == []
 
 
 def test_nothing_ticked_does_nothing(env):

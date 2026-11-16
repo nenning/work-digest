@@ -9,7 +9,7 @@ from digest.spec_monitor.models import (
 )
 from digest.spec_monitor.week import _week
 
-LABELS = {"frozen": "frozen page", "ticket": "create Jira ticket", "cr": "create CR", "done": "done"}
+LABELS = {"reject": "reject change", "frozen": "frozen page", "ticket": "create Jira ticket", "cr": "create CR", "done": "done"}
 
 
 def _pc(pid, title, status=PageStatus.CHANGED, labels=None, trace=None):
@@ -100,8 +100,9 @@ def test_task_id_mapping():
     assert pd.task_id(1, "frozen") == 11
     assert pd.task_action(31) == (3, "frozen")
     assert pd.task_action(12) == (1, "ticket")
+    assert pd.task_id(2, "reject") == 24 and pd.task_action(24) == (2, "reject")
     with pytest.raises(ValueError):
-        pd.task_action(14)
+        pd.task_action(15)
 
 
 def test_parse_tasks_over_two_lists():
@@ -114,7 +115,7 @@ def test_parse_tasks_over_two_lists():
 def test_render_tasks_without_frozen():
     e = _data().pages[0]
     out = pd.render_tasks(e, LABELS)
-    assert pd.parse_tasks(out) == {12: "incomplete", 13: "incomplete"}
+    assert pd.parse_tasks(out) == {14: "incomplete", 12: "incomplete", 13: "incomplete"}
     assert out.count("<ac:task-list>") == 1
     assert 'href="https://x/1"' in out and "create Jira ticket" in out and "create CR" in out
     assert "frozen page" not in out
@@ -122,7 +123,8 @@ def test_render_tasks_without_frozen():
 
 def test_render_tasks_with_frozen_and_ids_for_page_two():
     d = pd.build_data(_report([_pc("1", "A", labels=None), _pc("2", "B", labels=None)]), "frozen")
-    assert pd.parse_tasks(pd.render_tasks(d.pages[1], LABELS)) == {21: "incomplete", 22: "incomplete", 23: "incomplete"}
+    assert pd.parse_tasks(pd.render_tasks(d.pages[1], LABELS)) == {
+        24: "incomplete", 21: "incomplete", 22: "incomplete", 23: "incomplete"}
 
 
 def test_render_tasks_done_lines_and_empty():
@@ -130,10 +132,18 @@ def test_render_tasks_done_lines_and_empty():
     e.actions["ticket"] = pd.ActionState("done", "PSSA-1", "2026-11-16")
     out = pd.render_tasks(e, LABELS)
     assert "<p>" in out and "done" in out and "PSSA-1" in out and "2026-11-16" in out
-    assert pd.parse_tasks(out) == {13: "incomplete"}
+    assert pd.parse_tasks(out) == {14: "incomplete", 13: "incomplete"}
     e.actions["cr"] = pd.ActionState("done", "CR-2026-KW45.md", "2026-11-16")
     out = pd.render_tasks(e, LABELS)
-    assert "<ac:task" not in out and out.count("<p>") == 2
+    assert pd.parse_tasks(out) == {14: "incomplete"} and out.count("<p>") == 2
+
+
+def test_reject_box_comes_first_and_is_never_an_action():
+    e = _data().pages[0]
+    out = pd.render_tasks(e, LABELS)
+    assert out.index("reject change") < out.index("create Jira ticket") < out.index("create CR")
+    assert "reject" not in pd.ACTIONS and "reject" not in e.actions
+    assert "reject" not in pd.to_json(_data())
 
 
 def test_render_tasks_failed_action_stays_a_task_and_escapes():
