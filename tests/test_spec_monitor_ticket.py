@@ -755,3 +755,30 @@ def test_create_ticket_detailed_collects_link_failures(monkeypatch, tmp_path):
     _create(monkeypatch, tmp_path, PROJ, routes=_routes(link=FakeResp(500, text="x"), remote=FakeResp(403, text="y")))
     result = ticket.create_ticket_detailed(_config(tmp_path, PROJ), build_ticket(_analysis(), PROJ, "de"))
     assert len(result.link_failures) == 3
+
+
+def test_create_ticket_detailed_uses_given_block_and_retry(monkeypatch, tmp_path):
+    api = FakeApi(_routes())
+    monkeypatch.setattr(ticket, "request_with_retry", api)
+    monkeypatch.setattr(ticket, "get_auth_header", lambda a: "Basic abc")
+    own = TicketConfig(project="PSSA", issue_type="Story", labels=["pw"])
+    retry = RetryConfig(attempts=7, backoff_seconds=0)
+    config = _config(tmp_path)
+    config.spec_monitor = None
+    draft = ticket.TicketDraft(summary="s", description="d", labels=["pw", "x"])
+    result = ticket.create_ticket_detailed(config, draft, tcfg=own, retry=retry)
+    assert result.url == f"{BASE}/browse/RMEG-99"
+    (_, _, kw), = api.posts("/rest/api/2/issue")
+    assert kw["json"]["fields"]["project"] == {"key": "PSSA"} and kw["json"]["fields"]["issuetype"] == {"name": "Story"}
+    assert all(c[2]["retry"] is retry for c in api.calls)
+
+
+def test_create_ticket_detailed_defaults_to_spec_monitor_block_and_retry(monkeypatch, tmp_path):
+    api = FakeApi(_routes())
+    monkeypatch.setattr(ticket, "request_with_retry", api)
+    monkeypatch.setattr(ticket, "get_auth_header", lambda a: "Basic abc")
+    config = _config(tmp_path)
+    ticket.create_ticket_detailed(config, ticket.TicketDraft(summary="s", description="d"))
+    (_, _, kw), = api.posts("/rest/api/2/issue")
+    assert kw["json"]["fields"]["project"] == {"key": "RMEG"}
+    assert kw["retry"] is config.spec_monitor.retry

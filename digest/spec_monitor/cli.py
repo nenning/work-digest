@@ -181,7 +181,34 @@ def run_page_watch_cli(args, config: Config, cache_file: Path, command_line: str
     _exit_on_watch_problems(report)
 
 
+def run_page_watch_apply_cli(args, config: Config) -> None:
+    """`--page-watch-apply [TARGET]`: exit 0 all done / nothing to do, 1 fatal, 2 some actions failed."""
+    from digest.spec_monitor.page_watch_apply import ApplyFatal, run_apply
+
+    try:
+        results = run_apply(config, target=args.page_watch_apply, dry_run=bool(args.dry_run))
+    except ApplyFatal as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    failed = [line for r in results for line in r.failed]
+    done = sum(len(r.done) for r in results)
+    skipped = sum(r.skipped for r in results)
+    print(f"\nPage watch apply{' (dry run)' if args.dry_run else ''}: {len(results)} report page(s), "
+          f"{done} action(s) {'planned' if args.dry_run else 'done'}, {skipped} already done, {len(failed)} failed")
+    for r in results:
+        for line in r.warnings:
+            print(f"WARNING: {line}", file=sys.stderr)
+    if failed:
+        print("ERROR: some actions failed (their boxes stay ticked, the next run retries them):", file=sys.stderr)
+        for line in failed:
+            print(f"  - {line}", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def _dispatch(args, config: Config, cache_file: Path, command_line: str) -> None:
+    if getattr(args, "page_watch_apply", None) is not None:
+        run_page_watch_apply_cli(args, config)
+        return
     if getattr(args, "page_watch", False):
         run_page_watch_cli(args, config, cache_file, command_line)
         return

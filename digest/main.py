@@ -249,6 +249,16 @@ def main() -> None:
              "not combinable with --days",
     )
     parser.add_argument(
+        "--page-watch-apply",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="TARGET",
+        help="Act on the boxes ticked on --page-watch report pages (frozen label, Jira ticket, CR file): "
+             "TARGET is KW45-2026, a page id or a page URL; without TARGET every report page of the last 8 "
+             "weeks (see docs/architecture/page-watch.md)",
+    )
+    parser.add_argument(
         "--all-states",
         action="store_true",
         help="In spec monitor: give every spec the full analysis, whatever its status "
@@ -348,9 +358,15 @@ def main() -> None:
         print("SMTP authentication stored successfully.")
         return
 
-    spec_mode = args.spec_monitor or bool(args.create_ticket) or bool(args.update_spec) or args.page_watch
-    if sum([bool(args.spec_monitor), bool(args.create_ticket), bool(args.update_spec), args.page_watch]) > 1:
-        parser.error("--spec-monitor, --create-ticket, --update-spec and --page-watch are mutually exclusive")
+    apply_mode = args.page_watch_apply is not None
+    spec_mode = (args.spec_monitor or bool(args.create_ticket) or bool(args.update_spec) or args.page_watch
+                 or apply_mode)
+    if sum([bool(args.spec_monitor), bool(args.create_ticket), bool(args.update_spec), args.page_watch,
+            apply_mode]) > 1:
+        parser.error("--spec-monitor, --create-ticket, --update-spec, --page-watch and --page-watch-apply "
+                     "are mutually exclusive")
+    if apply_mode and (args.publish_page or args.days is not None or args.week is not None):
+        parser.error("--page-watch-apply cannot be combined with --publish-page, --days or --week")
     if spec_mode and args.mgmt_summary:
         parser.error("the spec monitor modes, --page-watch and --mgmt-summary are mutually exclusive")
     if args.spec and not args.spec_monitor:

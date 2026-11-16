@@ -13,7 +13,7 @@ from datetime import date
 from typing import Dict, List, Optional
 
 from digest.auth.atlassian import get_auth_header
-from digest.config import Config, TicketConfig
+from digest.config import Config, RetryConfig, TicketConfig
 from digest.spec_monitor import runner
 from digest.spec_monitor.http import RequestFailed, request_with_retry
 from digest.spec_monitor.models import Classification, SpecAnalysis
@@ -216,10 +216,11 @@ def _headers(config: Config) -> dict:
     }
 
 
-def _call(config: Config, method: str, path: str, what: str, **kwargs):
+def _call(config: Config, method: str, path: str, what: str, *, retry: Optional[RetryConfig] = None, **kwargs):
     url = f"{config.atlassian.jira_api_base.rstrip('/')}{path}"
     try:
-        return request_with_retry(method, url, retry=config.spec_monitor.retry, headers=_headers(config), **kwargs)
+        return request_with_retry(method, url, retry=retry or config.spec_monitor.retry, headers=_headers(config),
+                                  **kwargs)
     except RequestFailed as exc:
         raise TicketError(f"{what} failed: {exc}") from exc
 
@@ -341,13 +342,15 @@ def create_ticket(config: Config, draft: TicketDraft) -> str:
     return create_ticket_detailed(config, draft).url
 
 
-def create_ticket_detailed(config: Config, draft: TicketDraft) -> TicketResult:
+def create_ticket_detailed(config: Config, draft: TicketDraft, *, tcfg: Optional[TicketConfig] = None,
+                           retry: Optional[RetryConfig] = None) -> TicketResult:
     """Like create_ticket, but also reports optional fields Jira rejected (dropped, never fatal).
+    `tcfg` / `retry` default to the spec_monitor ones.
 
     A 400 whose `errors` name only non-core fields drops exactly those fields and retries; a core
     field (summary/description/project/issuetype), a 400 without field names, or any other failure raises.
     """
-    tcfg = config.spec_monitor.ticket
+    tcfg = tcfg or config.spec_monitor.ticket
 
     fields, dropped_forbidden, ignored = build_fields(tcfg, draft)
     for k in dropped_forbidden:
@@ -362,7 +365,7 @@ def create_ticket_detailed(config: Config, draft: TicketDraft) -> TicketResult:
     for _ in range(max_attempts):
         payload = dict(fields)
         payload["description"] = _with_note(draft.description, dropped, getattr(config, "language", "de"))
-        resp = _call(config, "POST", "/rest/api/2/issue", "ticket creation", json={"fields": payload})
+        resp = _call(config, "POST", "/rest/api/2/issue", "ticket creation", retry=retry, json={"fields": payload})
         if resp.ok:
             break
         rejected = _rejected_optional_fields(resp, fields) if resp.status_code == 400 else {}
@@ -391,7 +394,7 @@ def create_ticket_detailed(config: Config, draft: TicketDraft) -> TicketResult:
             "outwardIssue": {"key": other},
         }
         try:
-            lresp = _call(config, "POST", "/rest/api/2/issueLink", "issue link", json=body)
+            lresp = _call(config, "POST", "/rest/api/2/issueLink", "issue link", retry=retry, json=body)
             if not lresp.ok:
                 reason = f"HTTP {lresp.status_code} {_short(lresp)}"
                 print(f"WARNING: issue link to {other} failed: {reason}", file=sys.stderr)
@@ -403,7 +406,7 @@ def create_ticket_detailed(config: Config, draft: TicketDraft) -> TicketResult:
     if tcfg.remote_link and draft.spec_url:
         body = {"object": {"url": draft.spec_url, "title": f"Spezifikation: {draft.spec_title or draft.summary}"}}
         try:
-            rresp = _call(config, "POST", f"/rest/api/2/issue/{key}/remotelink", "remote link", json=body)
+            rresp = _call(config, "POST", f"/rest/api/2/issue/{key}/remotelink", "remote link", retry=retry, json=body)
             if not rresp.ok:
                 reason = f"HTTP {rresp.status_code} {_short(rresp)}"
                 print(f"WARNING: remote link to the spec page failed: {reason}", file=sys.stderr)
