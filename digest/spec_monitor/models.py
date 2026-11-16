@@ -261,6 +261,40 @@ class PageStatus(str, Enum):
 
 
 @dataclass
+class TraceCandidate:
+    kind: str                                        # "jira" | "mr" | "branch" | "code"
+    ref: str
+    label: str
+    url: str
+    detail: str = ""
+    status: str = ""
+    own: bool = False                                # created by the apply step (pagewatch-* label)
+
+
+class TraceSourceError(Exception):
+    """A trace source could not be searched; the message is user-facing."""
+
+
+@dataclass
+class TraceReference:
+    kind: str
+    ref: str
+    label: str
+    url: str
+    verdict: str                                     # in_progress | done_likely | related
+    reason: str = ""
+    own: bool = False
+
+
+@dataclass
+class PageTrace:
+    status: str                                      # FROZEN | FOUND | NONE | INCOMPLETE
+    references: List[TraceReference] = field(default_factory=list)
+    searched: List[str] = field(default_factory=list)
+    problems: List[str] = field(default_factory=list)
+
+
+@dataclass
 class PageChange:
     """One page of a --page-watch run."""
     page_id: str
@@ -273,6 +307,7 @@ class PageChange:
     summary_failed: str = ""                         # reason, when the per-page LLM summary failed
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    trace: Optional[PageTrace] = None
 
 
 @dataclass
@@ -311,6 +346,7 @@ class PageWatchReport:
     cache_write_error: str = ""
     command_line: str = ""
     language: str = "de"
+    trace_enabled: bool = False
 
     def with_status(self, *statuses: "PageStatus") -> List[PageChange]:
         return [p for p in self.pages if p.status in statuses]
