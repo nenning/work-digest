@@ -1,6 +1,7 @@
 """CLI delivery of a spec-monitor run: preview, mail, optional Confluence page."""
 import logging
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,7 @@ from digest.spec_monitor.publish import publish_page
 from digest.spec_monitor.refcheck import run_reference_check
 from digest.spec_monitor.report import _problem_count, build_subject, render_confluence_storage, render_mail_html
 from digest.spec_monitor.runner import SpecMonitorFatal, run_spec_monitor
+from digest.spec_monitor.week import parse_week
 
 log = logging.getLogger(__name__)
 
@@ -117,12 +119,18 @@ def run_page_watch_cli(args, config: Config, cache_file: Path, command_line: str
         raise RuntimeError("No page_watch block configured. Add one to config.yaml to use --page-watch.")
     if args.publish_page and not pw.publish_parent_page_id:
         raise ValueError("--publish-page requires page_watch.confluence_page.parent_page_id in config.yaml")
+    week_text = getattr(args, "week", None)
+    week = parse_week(week_text, date.today()) if week_text else None
+    rolling = week is None and (getattr(args, "days", None) is not None or pw.window_days is not None)
+    if args.publish_page and rolling:
+        raise ValueError("--publish-page needs a calendar week: use the default window or --week "
+                         "(--days and page_watch.window_days give a rolling window)")
     recipient = _watch_recipient(config)
     if not recipient and not args.dry_run:
         raise RuntimeError("email.recipient (or mgmt_summary.recipient / page_watch.recipient) must be set in config.yaml")
 
     try:
-        report = run_page_watch(config, days=getattr(args, "days", None), command_line=command_line)
+        report = run_page_watch(config, days=getattr(args, "days", None), week=week, command_line=command_line)
     except SpecMonitorFatal as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         if recipient and not args.dry_run:

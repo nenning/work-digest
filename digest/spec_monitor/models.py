@@ -10,6 +10,8 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Callable, List, Optional, Tuple
 
+from digest.spec_monitor.week import Week
+
 
 class SourceKind(str, Enum):
     CONFLUENCE = "confluence"
@@ -42,6 +44,7 @@ class SourceRef:
     url: Optional[str] = None
     baseline_version: Optional[str] = None   # stated version: "86", "6.0.0", commit sha
     baseline_date: Optional[date] = None     # stated date (alone or next to the version)
+    target_date: Optional[date] = None       # --page-watch: the new state is the last version at or before the end of this day
     note: str = ""                           # extra row text: branch/commit, remarks
     section: Optional[str] = None            # e.g. "Abschnitt 3.1.8"
     repo_name: Optional[str] = None          # configured repository name (kind REPO)
@@ -300,6 +303,8 @@ class PageWatchReport:
     parent_url: str = ""
     window_days: int = 14
     window_start: Optional[date] = None      # first day covered by the window
+    window_end: Optional[date] = None        # last day covered; None = rolling window up to now
+    week: Optional[Week] = None            # set for a calendar-week report
     pages: List[PageChange] = field(default_factory=list)
     synthesis: Optional[WatchSynthesis] = None
     analysis_incomplete: bool = False

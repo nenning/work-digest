@@ -59,7 +59,7 @@ def test_dry_run_writes_only_the_preview_and_sends_nothing(tmp_path, stubs):
 
 def test_run_passes_days_and_command_line(tmp_path, stubs):
     cli.run_page_watch_cli(_args(days=7), _config(tmp_path), tmp_path / "t", "python digest/main.py --page-watch")
-    assert stubs.call_args.kwargs == {"days": 7, "command_line": "python digest/main.py --page-watch"}
+    assert stubs.call_args.kwargs == {"days": 7, "week": None, "command_line": "python digest/main.py --page-watch"}
 
 
 def test_sends_mail_and_keeps_the_html(tmp_path, stubs):
@@ -152,6 +152,9 @@ def _main(monkeypatch, tmp_path, *argv):
     ["--page-watch", "--days", "0"],
     ["--page-watch", "--days", "-3"],
     ["--page-watch", "--days", "x"],
+    ["--week", "KW44-2026"],
+    ["--page-watch", "--week", "KW44-2026", "--days", "3"],
+    ["--page-watch", "--week", "2026-44"],
     ["--page-watch", "--spec-monitor"],
     ["--page-watch", "--create-ticket", "X"],
     ["--page-watch", "--update-spec"],
@@ -169,8 +172,44 @@ def test_invalid_flag_combinations_are_rejected(tmp_path, monkeypatch, argv):
     (["--page-watch"], None),
     (["--page-watch", "--dry-run"], None),
     (["--page-watch", "--days", "30", "--publish-page"], 30),
+    (["--page-watch", "--week", "KW44-2026"], None),
 ])
 def test_valid_page_watch_invocations_dispatch(tmp_path, monkeypatch, argv, days):
     dispatch = _main(monkeypatch, tmp_path, *argv)
     dispatch.assert_called_once()
     assert dispatch.call_args[0][0].page_watch is True and dispatch.call_args[0][0].days == days
+
+
+def test_week_option_is_passed_on_as_text(tmp_path, monkeypatch):
+    dispatch = _main(monkeypatch, tmp_path, "--page-watch", "--week", "kw44 2026")
+    assert dispatch.call_args[0][0].week == "kw44 2026"
+
+
+def test_week_option_is_parsed_and_passed_to_the_run(tmp_path, stubs):
+    cli.run_page_watch_cli(_args(week="KW44-2026"), _config(tmp_path), tmp_path / "t", "cmd")
+    week = stubs.call_args.kwargs["week"]
+    assert week.label == "KW44 2026" and stubs.call_args.kwargs["days"] is None
+
+
+def test_invalid_week_text_is_an_error_before_any_call(tmp_path, stubs):
+    with pytest.raises(ValueError, match="week"):
+        cli.run_page_watch_cli(_args(week="KW99-2026"), _config(tmp_path), tmp_path / "t", "cmd")
+    stubs.assert_not_called()
+
+
+@pytest.mark.parametrize("kw", [{"days": 3}, {"window": 14}])
+def test_publish_is_refused_for_a_rolling_window(tmp_path, stubs, kw):
+    config = _config(tmp_path, publish_parent="5")
+    config.page_watch.window_days = kw.get("window")
+    with pytest.raises(ValueError, match="calendar week"):
+        cli.run_page_watch_cli(_args(publish_page=True, days=kw.get("days")), config, tmp_path / "t", "cmd")
+    stubs.assert_not_called()
+    cli.publish_page.assert_not_called()
+
+
+def test_publish_is_allowed_for_the_default_week_and_for_an_explicit_week(tmp_path, stubs):
+    config = _config(tmp_path, publish_parent="5")
+    cli.run_page_watch_cli(_args(publish_page=True), config, tmp_path / "t", "cmd")
+    config.page_watch.window_days = 14
+    cli.run_page_watch_cli(_args(publish_page=True, week="KW44-2026"), config, tmp_path / "t", "cmd")
+    assert cli.publish_page.call_count == 2

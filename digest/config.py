@@ -220,7 +220,7 @@ class SpecMonitorConfig:
 @dataclass
 class PageWatchConfig:
     parent_page_id: str
-    window_days: int = 14
+    window_days: Optional[int] = None              # None = previous calendar week
     label: Optional[str] = None
     include_parent: bool = True
     recipient: Optional[str] = None
@@ -327,7 +327,8 @@ def _load_page_watch(raw: Optional[dict]) -> Optional[PageWatchConfig]:
     publish = (raw.get("confluence_page") or {}).get("parent_page_id")
     return PageWatchConfig(
         parent_page_id=str(parent),
-        window_days=_positive_int(raw.get("window_days", 14), "page_watch.window_days"),
+        window_days=(_positive_int(raw["window_days"], "page_watch.window_days")
+                     if raw.get("window_days") is not None else None),
         label=str(raw["label"]) if raw.get("label") else None,
         include_parent=bool(raw.get("include_parent", True)),
         recipient=raw.get("recipient") or None,

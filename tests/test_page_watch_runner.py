@@ -13,8 +13,10 @@ from digest.spec_monitor.models import (
     Classification, DeltaChange, PageStatus, SourceResult, VersionPoint, WatchSynthesis,
 )
 from digest.spec_monitor.runner import SpecMonitorFatal
+from digest.spec_monitor.week import parse_week
 
 TODAY = date(2026, 11, 13)
+SUNDAY = date(2026, 11, 15)
 
 
 def _iso(day, hour=10):
@@ -26,6 +28,7 @@ def _vp(number, day):
 
 
 def _config(tmp_path, **over):
+    over.setdefault("window_days", 14)
     pw = PageWatchConfig(parent_page_id="1", retry=RetryConfig(1, 0), workers=over.pop("workers", 1), **over)
     return SimpleNamespace(
         page_watch=pw, atlassian=MagicMock(), language="de", data_dir=tmp_path,
@@ -288,3 +291,66 @@ def test_workers_run_pages_in_parallel_and_keep_order(tmp_path):
     entries = [_entry(c, date(2026, 10, 1)) for c in "DCBA"]
     report = _run(_config(tmp_path, workers=4), FakeClient(entries))
     assert [p.page_id for p in report.pages] == ["1", "A", "B", "C", "D"]
+
+
+def _week_run(config, client, monitor=None, **kw):
+    return page_watch.run_page_watch(config, client=client, monitor=monitor or FakeMonitor(), today=SUNDAY,
+                                     progress=lambda _m: None, **kw)
+
+
+def test_default_window_is_previous_week(tmp_path):
+    report = _week_run(_config(tmp_path, window_days=None), FakeClient([]))
+    assert report.week.label == "KW45 2026"
+    assert report.window_start == date(2026, 11, 2) and report.window_end == date(2026, 11, 8)
+    assert report.window_days == 7
+
+
+def test_days_overrides_the_week(tmp_path):
+    report = _week_run(_config(tmp_path, window_days=None), FakeClient([]), days=3)
+    assert report.week is None and report.window_end is None and report.window_days == 3
+
+
+def test_config_window_days_beats_the_weekly_default(tmp_path):
+    report = _week_run(_config(tmp_path, window_days=5), FakeClient([]))
+    assert report.week is None and report.window_days == 5
+
+
+def test_explicit_week_beats_config_window_days(tmp_path):
+    week = parse_week("KW44-2026", SUNDAY)
+    report = _week_run(_config(tmp_path, window_days=14), FakeClient([]), week=week)
+    assert report.week == week and report.window_start == date(2026, 10, 26)
+
+
+def test_weekly_changed_page_is_resolved_with_week_bounds(tmp_path):
+    client = FakeClient([_entry("A", date(2026, 11, 5))])
+    client.versions["A"] = [_vp(1, date(2026, 10, 1)), _vp(2, date(2026, 11, 5))]
+    monitor = FakeMonitor()
+    _week_run(_config(tmp_path, window_days=None), client, monitor)
+    ref, _ = monitor.refs[0]
+    assert ref.baseline_date == date(2026, 11, 1) and ref.target_date == date(2026, 11, 8)
+
+
+def test_page_created_after_window_end_is_unchanged_without_error(tmp_path):
+    client = FakeClient([_entry("L", date(2026, 11, 10))])
+    client.versions["L"] = [_vp(1, date(2026, 11, 10))]
+    monitor = FakeMonitor()
+    report = _week_run(_config(tmp_path, window_days=None), client, monitor)
+    page = next(p for p in report.pages if p.page_id == "L")
+    assert page.status == PageStatus.UNCHANGED and not page.errors and not report.errors
+    assert monitor.refs == []
+
+
+def test_new_page_text_is_taken_at_window_end(tmp_path):
+    client = FakeClient([_entry("N", date(2026, 11, 12))])
+    client.versions["N"] = [_vp(1, date(2026, 11, 4)), _vp(2, date(2026, 11, 12))]
+    seen = []
+    client.get_body = lambda pid, version: seen.append(version) or "<p>Inhalt</p>"
+    page = next(p for p in _week_run(_config(tmp_path, window_days=None), client).pages if p.page_id == "N")
+    assert page.status == PageStatus.NEW and seen == [1]
+
+
+def test_weekly_synthesis_label_names_the_week(tmp_path, llm):
+    client = FakeClient([_entry("A", date(2026, 11, 5))])
+    client.versions["A"] = [_vp(1, date(2026, 10, 1)), _vp(2, date(2026, 11, 5))]
+    _week_run(_config(tmp_path, window_days=None), client)
+    assert llm.call_args.args[1] == "2026-11-02 to 2026-11-08 (KW45 2026)"

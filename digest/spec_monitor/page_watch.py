@@ -18,6 +18,7 @@ from digest.spec_monitor.models import (
     SpecInfo, VersionPoint,
 )
 from digest.spec_monitor.runner import SpecMonitorFatal
+from digest.spec_monitor.week import Week, previous_week
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +35,9 @@ def baseline_day(window_days: int, today: Optional[date] = None) -> date:
     return (today or date.today()) - timedelta(days=window_days)
 
 
-def window_label(start: date, today: date, window_days: int) -> str:
+def window_label(start: date, today: date, window_days: int, week: Optional[Week] = None) -> str:
+    if week is not None:
+        return f"{week.start.isoformat()} to {week.end.isoformat()} ({week.label})"
     return f"{start.isoformat()} to {today.isoformat()} ({window_days} days, today included)"
 
 
@@ -44,7 +47,7 @@ def _end_of_day(day: date) -> datetime:
 
 class _PageWatch:
     def __init__(self, config: Config, client: ConfluenceClient, monitor, cache: SpecCache, parent_title: str,
-                 parent_id: str, bday: date, progress: Callable[[str], None]):
+                 parent_id: str, bday: date, progress: Callable[[str], None], end_day: Optional[date] = None):
         self.config = config
         self.client = client
         self.monitor = monitor
@@ -52,6 +55,7 @@ class _PageWatch:
         self.parent_title = parent_title
         self.parent_id = parent_id
         self.bday = bday
+        self.end_day = end_day
         self.progress = progress
         self.llm_summary = spec_llm(config, "summary")
 
@@ -66,8 +70,10 @@ class _PageWatch:
             versions = self.client.list_versions(pid)
             if versions and any(v.when is None for v in versions):
                 raise LookupError("version dates are missing in the page history; the window cannot be applied")
+            if versions and self.end_day and pick_version_at(versions, self.end_day) is None:
+                return change
             if versions and pick_version_at(versions, self.bday) is None:
-                self._new_page(change, versions[-1])
+                self._new_page(change, pick_version_at(versions, self.end_day) if self.end_day else versions[-1])
             else:
                 self._changed_page(change, entry)
         except RequestFailed as exc:
@@ -118,7 +124,7 @@ class _PageWatch:
 
     def _changed_page(self, change: PageChange, entry: dict) -> None:
         ref = SourceRef(name=change.title, kind=SourceKind.CONFLUENCE, title=change.title, page_id=change.page_id,
-                        url=change.url, baseline_date=self.bday)
+                        url=change.url, baseline_date=self.bday, target_date=self.end_day)
         spec = SpecInfo(page_id=change.page_id, title=change.title, url=change.url, status="",
                         ancestor_titles=list(change.path))
         result = self.monitor.resolve(ref, spec)
@@ -155,6 +161,7 @@ def run_page_watch(
     config: Config,
     *,
     days: Optional[int] = None,
+    week: Optional[Week] = None,
     command_line: str = "",
     progress: Callable[[str], None] = print,
     client: Optional[ConfluenceClient] = None,
@@ -165,11 +172,16 @@ def run_page_watch(
     pw = config.page_watch
     if pw is None:
         raise SpecMonitorFatal("No page_watch block configured in config.yaml")
-    window_days = days if days is not None else pw.window_days
-    if window_days < 1:
-        raise SpecMonitorFatal(f"the window must be at least 1 day, got {window_days}")
     today = today or date.today()
-    bday = baseline_day(window_days, today)
+    if week is None and days is None and pw.window_days is None:
+        week = previous_week(today)
+    if week is not None:
+        window_days, bday, end_day = 7, week.start - timedelta(days=1), week.end
+    else:
+        window_days = days if days is not None else pw.window_days
+        if window_days < 1:
+            raise SpecMonitorFatal(f"the window must be at least 1 day, got {window_days}")
+        bday, end_day = baseline_day(window_days, today), None
 
     cache = SpecCache(cache_dir or (config.data_dir / "spec_cache"))
     if client is None:
@@ -194,15 +206,15 @@ def run_page_watch(
     report = PageWatchReport(
         generated_at=datetime.now().astimezone(), parent_title=parent_title,
         parent_url=client.page_url(str(pw.parent_page_id)), window_days=window_days,
-        window_start=bday + timedelta(days=1), command_line=command_line, language=config.language,
+        window_start=bday + timedelta(days=1), window_end=end_day, week=week, command_line=command_line, language=config.language,
     )
     if not entries:
         report.errors.append(ReportError(
             scope=f"page {pw.parent_page_id}", message="no page to watch (no descendants found and the parent is excluded)",
             impact="nothing was checked; 'no changes' is meaningless -- check parent_page_id, label and include_parent"))
-    progress(f"{len(entries)} page(s) to check, window {window_label(report.window_start, today, window_days)}")
+    progress(f"{len(entries)} page(s) to check, window {window_label(report.window_start, today, window_days, week)}")
 
-    watch = _PageWatch(config, client, monitor, cache, parent_title, str(pw.parent_page_id), bday, progress)
+    watch = _PageWatch(config, client, monitor, cache, parent_title, str(pw.parent_page_id), bday, progress, end_day)
     if pw.workers > 1 and len(entries) > 1:
         with ThreadPoolExecutor(max_workers=pw.workers) as pool:
             report.pages = list(pool.map(watch.process, entries))
@@ -225,7 +237,7 @@ def run_page_watch(
     if changed:
         try:
             report.synthesis = watch_analysis.synthesize_watch(
-                changed, window_label(report.window_start, today, window_days), parent_title,
+                changed, window_label(report.window_start, today, window_days, week), parent_title,
                 spec_llm(config, "heavy"), config.language, cache)
         except AnalysisError as exc:
             report.analysis_incomplete = True

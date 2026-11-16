@@ -170,6 +170,8 @@ def _counts(report: PageWatchReport) -> dict:
 
 def _window(report: PageWatchReport) -> str:
     start = report.window_start.isoformat() if report.window_start else "?"
+    if report.week is not None and report.window_end is not None:
+        return f"{start} {_labels(report)['window_to']} {report.window_end.isoformat()} ({report.week.label})"
     return f"{start} {_labels(report)['window_to']} {report.generated_at:%Y-%m-%d} ({report.window_days})"
 
 

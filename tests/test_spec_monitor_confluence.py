@@ -280,6 +280,31 @@ def test_baseline_date_inferred(text_mocks):
     assert res.classification == Classification.CHANGED
 
 
+def test_target_date_pins_the_new_version(text_mocks):
+    versions = [_vp(1, 2026, 10, 1), _vp(2, 2026, 10, 28), _vp(3, 2026, 11, 12)]
+    mon, client = make_monitor(new_ver=3, versions=versions, bodies={1: "OLD", 2: "MID", 3: "LATE"})
+    res = mon.resolve(ref(baseline_date=date(2026, 10, 20), target_date=date(2026, 11, 8)), spec())
+    assert res.classification == Classification.CHANGED
+    assert res.old.version == "1" and res.new.version == "2"
+    assert res.old_text == "OLD" and res.new_text == "MID"
+    client.diff_url.assert_called_with("100", 1, 2)
+
+
+def test_target_date_without_change_inside_the_window_is_unchanged(text_mocks):
+    versions = [_vp(1, 2026, 10, 1), _vp(2, 2026, 11, 12)]
+    mon, client = make_monitor(new_ver=2, versions=versions)
+    res = mon.resolve(ref(baseline_date=date(2026, 10, 20), target_date=date(2026, 11, 8)), spec())
+    assert res.classification == Classification.UNCHANGED
+    assert res.old.version == res.new.version == "1"
+    client.get_body.assert_not_called()
+
+
+def test_target_date_before_first_version_is_an_error(text_mocks):
+    mon, _ = make_monitor(new_ver=1, versions=[_vp(1, 2026, 11, 12)])
+    res = mon.resolve(ref(baseline_date=date(2026, 10, 20), target_date=date(2026, 11, 8)), spec())
+    assert res.classification == Classification.ERROR
+
+
 def test_fallback_to_stand_date_then_created(text_mocks):
     versions = [_vp(n, 2026, 10, n * 2) for n in range(1, 6)]
     mon, _ = make_monitor(new_ver=5, versions=versions)

@@ -186,3 +186,17 @@ def test_confluence_storage_lists_errors_and_escapes():
     report = _report(errors=[ReportError(scope="<x>", message="m", impact="i")])
     storage = pr.render_confluence_storage(report)
     assert "&lt;x&gt;" in storage and "<x>" not in storage
+
+
+def test_weekly_header_names_the_week_and_both_dates():
+    from digest.spec_monitor.week import parse_week
+    week = parse_week("KW44-2026", date(2026, 11, 15))
+    report = _report(week=week, window_start=week.start, window_end=week.end, window_days=7)
+    html = pr.render_mail_html(report)
+    assert "KW44 2026" in html and "2026-10-26" in html and "2026-11-01" in html
+    assert "KW44 2026" in pr.render_confluence_storage(report)
+
+
+def test_rolling_header_is_unchanged():
+    html = pr.render_mail_html(_report())
+    assert "KW" not in html.split("Zeitraum", 1)[1][:200] and "2026-10-31 bis 2026-11-13 (14)" in html

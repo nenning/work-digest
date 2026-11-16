@@ -22,6 +22,7 @@ import concurrent.futures
 import getpass
 import keyring
 import logging
+import re
 import shlex
 import time
 from datetime import datetime, timedelta, timezone
@@ -123,6 +124,15 @@ def _positive_days(value: str) -> int:
     if days < 1:
         raise argparse.ArgumentTypeError(f"must be a positive whole number of days, got: {value!r}")
     return days
+
+
+_WEEK_FORMAT = re.compile(r"^\s*KW\d{1,2}[-\s]\d{4}\s*$", re.IGNORECASE)
+
+
+def _week_text(value: str) -> str:
+    if not _WEEK_FORMAT.match(value):
+        raise argparse.ArgumentTypeError(f"must look like KW44-2026, got: {value!r}")
+    return value
 
 
 def main() -> None:
@@ -227,7 +237,16 @@ def main() -> None:
         type=_positive_days,
         default=None,
         metavar="N",
-        help="With --page-watch: length of the window in days (default: page_watch.window_days, 14)",
+        help="With --page-watch: rolling window of N days up to now (default: page_watch.window_days if set, "
+             "else the previous calendar week)",
+    )
+    parser.add_argument(
+        "--week",
+        type=_week_text,
+        default=None,
+        metavar="KWnn-YYYY",
+        help="With --page-watch: report this calendar week (Monday to Sunday) instead of the previous one; "
+             "not combinable with --days",
     )
     parser.add_argument(
         "--all-states",
@@ -340,6 +359,10 @@ def main() -> None:
         parser.error("--publish-page requires --spec-monitor or --page-watch")
     if args.days is not None and not args.page_watch:
         parser.error("--days requires --page-watch")
+    if args.week is not None and not args.page_watch:
+        parser.error("--week requires --page-watch")
+    if args.week is not None and args.days is not None:
+        parser.error("--week and --days are mutually exclusive")
     if args.check_references and not args.spec_monitor:
         parser.error("--check-references requires --spec-monitor")
     if args.draft and not args.check_references:

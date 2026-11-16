@@ -32,6 +32,10 @@ def _sources_table(storage: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def label_of(ref: SourceRef) -> str:
+    return ref.title or ref.name
+
+
 class _Failure(Exception):
     """Expected, already worded problem for one source."""
 
@@ -80,10 +84,17 @@ class ConfluenceMonitor:
                 raise _Failure(f"page '{ref.title}' not found{where}")
 
         live = client.get_page(page_id, with_body=False)
-        live_version = (live.get("version") or {})
-        new_number = int(live_version["number"])
-        new = VersionPoint(version=str(new_number), when=parse_when(live_version.get("when")),
-                           url=client.page_url(page_id, new_number))
+        if ref.target_date:
+            point = pick_version_at(client.list_versions(page_id), ref.target_date)
+            if point is None:
+                raise _Failure(f"{label_of(ref)}: no version at or before {ref.target_date.isoformat()}")
+            new_number = int(point.version)
+            new = VersionPoint(version=point.version, when=point.when, url=client.page_url(page_id, new_number))
+        else:
+            live_version = (live.get("version") or {})
+            new_number = int(live_version["number"])
+            new = VersionPoint(version=str(new_number), when=parse_when(live_version.get("when")),
+                               url=client.page_url(page_id, new_number))
 
         old = self._old_version(ref, spec, page_id, new_number, new)
         if old.version == new.version:

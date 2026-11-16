@@ -8,7 +8,7 @@ from digest.config import LLMConfig, _load_page_watch, effective_vision_llm, spe
 def test_defaults():
     cfg = _load_page_watch({"parent_page_id": 41484320})
     assert cfg.parent_page_id == "41484320"
-    assert cfg.window_days == 14
+    assert cfg.window_days is None
     assert cfg.include_parent is True
     assert cfg.label is None and cfg.recipient is None and cfg.publish_parent_page_id is None
     assert cfg.workers == 4 and cfg.llm_timeout == 240
@@ -36,7 +36,7 @@ def test_parent_is_required():
         _load_page_watch({"window_days": 7})
 
 
-@pytest.mark.parametrize("value", [0, -3, "x", 1.5, True, None])
+@pytest.mark.parametrize("value", [0, -3, "x", 1.5, True])
 def test_window_days_must_be_positive_integer(value):
     with pytest.raises(ValueError, match="window_days"):
         _load_page_watch({"parent_page_id": "1", "window_days": value})
@@ -70,3 +70,9 @@ def test_spec_llm_prefers_spec_monitor_and_falls_back_to_llm_timeout():
     pw = _load_page_watch({"parent_page_id": "1", "llm_timeout": 111})
     assert spec_llm(_config(spec_monitor=sm, page_watch=pw)).llm_timeout == 222
     assert spec_llm(_config()).llm_timeout == 30
+
+
+def test_window_days_is_optional():
+    assert _load_page_watch({"parent_page_id": "1"}).window_days is None
+    assert _load_page_watch({"parent_page_id": "1", "window_days": None}).window_days is None
+    assert _load_page_watch({"parent_page_id": "1", "window_days": 14}).window_days == 14
