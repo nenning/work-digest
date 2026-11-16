@@ -4,13 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from digest.config import LLMConfig, PageWatchConfig, RetryConfig
+from digest.config import LLMConfig, PageWatchConfig, PageWatchTraceConfig, RetryConfig
 from digest.spec_monitor import page_watch
 from digest.spec_monitor.analysis import AnalysisError
 from digest.spec_monitor.confluence_client import NoStorageBody
 from digest.spec_monitor.http import RequestFailed
 from digest.spec_monitor.models import (
-    Classification, DeltaChange, PageStatus, SourceResult, VersionPoint, WatchSynthesis,
+    Classification, DeltaChange, PageStatus, PageTrace, SourceResult, VersionPoint, WatchSynthesis,
 )
 from digest.spec_monitor.runner import SpecMonitorFatal
 from digest.spec_monitor.week import parse_week
@@ -395,3 +395,51 @@ def test_is_frozen_is_case_insensitive_and_unknown_labels_are_not_frozen():
     assert page_watch.is_frozen(page, "frozen") is True
     page.labels = ["other"]
     assert page_watch.is_frozen(page, "frozen") is False
+
+
+def _trace_config(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.page_watch.trace = PageWatchTraceConfig(jira_projects=["PSSA"])
+    return cfg
+
+
+def _changed_client():
+    client = FakeClient([_entry("A", date(2026, 11, 5)), _entry("U", date(2026, 10, 1))])
+    client.versions["A"] = [_vp(1, date(2026, 10, 1)), _vp(2, date(2026, 11, 5))]
+    return client
+
+
+def test_trace_runs_after_synthesis_for_changed_pages_only(tmp_path, mocker, llm):
+    order = []
+    llm.side_effect = lambda *a, **k: order.append("synthesis") or WatchSynthesis(overview="Gesamt", change_request="CR")
+    run_trace = mocker.patch("digest.spec_monitor.page_trace.run_trace", side_effect=lambda *a, **k: order.append("trace"))
+    mocker.patch.object(page_watch, "get_auth_header", return_value="h")
+    report = _run(_trace_config(tmp_path), _changed_client())
+    assert order == ["synthesis", "trace"] and report.trace_enabled
+    assert run_trace.call_args.args[1] is report
+    assert run_trace.call_args.kwargs["auth_header"] == "h" and run_trace.call_args.kwargs["today"] == TODAY
+
+
+def test_trace_is_skipped_without_changed_pages(tmp_path, mocker):
+    run_trace = mocker.patch("digest.spec_monitor.page_trace.run_trace")
+    mocker.patch.object(page_watch, "get_auth_header", return_value="h")
+    report = _run(_trace_config(tmp_path), FakeClient([_entry("U", date(2026, 10, 1))]))
+    run_trace.assert_not_called()
+    assert report.trace_enabled
+
+
+def test_no_trace_block_means_trace_disabled(tmp_path, mocker):
+    run_trace = mocker.patch("digest.spec_monitor.page_trace.run_trace")
+    report = _run(_config(tmp_path), _changed_client())
+    run_trace.assert_not_called()
+    assert report.trace_enabled is False and all(p.trace is None for p in report.pages)
+
+
+def test_trace_problems_become_report_errors(tmp_path, mocker):
+    mocker.patch.object(page_watch, "get_auth_header", return_value="h")
+    mocker.patch("digest.spec_monitor.page_trace.trace_page",
+                 return_value=PageTrace("INCOMPLETE", problems=["Jira search: HTTP 500"]))
+    report = _run(_trace_config(tmp_path), _changed_client())
+    page = next(p for p in report.pages if p.page_id == "A")
+    assert page.trace.status == "INCOMPLETE"
+    assert any(e.scope == "A" and "Jira search: HTTP 500" in e.message for e in report.errors)
