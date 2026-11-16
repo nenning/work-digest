@@ -30,6 +30,8 @@ pip install -r requirements.txt
 
 2. Edit `config.yaml` and fill in all required fields (see table below).
 
+   On every run the app writes the real Confluence title behind each `*page_id` entry as a comment (`parent_page_id: "123"  # «Page title» your note`). Only that comment is rewritten; your own text behind the `«title»` stays. A page that cannot be looked up leaves its line unchanged and prints a warning.
+
 ### Configuration Fields
 
 | Field | Required | Example | Notes |

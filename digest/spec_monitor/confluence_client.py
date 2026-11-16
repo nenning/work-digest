@@ -144,6 +144,12 @@ class ConfluenceClient:
         self._check(resp, url, f"page {page_id}")
         return resp.json()
 
+    def get_title(self, page_id: str) -> str:
+        url = f"{self._api}/content/{page_id}"
+        resp = self._get(url)
+        self._check(resp, url, f"page {page_id}")
+        return resp.json().get("title") or ""
+
     def get_body(self, page_id: str, version: int) -> str:
         key = f"{page_id}_v{version}"
         cached = self._cache.get_text("confluence_body", key)

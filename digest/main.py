@@ -32,6 +32,7 @@ from digest import problems
 from digest.auth.atlassian import get_auth_header, resolve_atlassian_config
 from digest.auth.microsoft import get_token
 from digest.config import MAX_LINK_DEPTH, heavy_llm, load_config
+from digest.config_annotate import annotate_config
 from digest.email_sender import (
     send_via_smtp, send_via_com,
     send_mgmt_summary_via_smtp, send_mgmt_summary_via_com,
@@ -331,7 +332,8 @@ def main() -> None:
     # Load config.yaml from the same directory as main.py so it works regardless of CWD.
     # This ensures Task Scheduler can invoke `python path\to\main.py` without needing to
     # set the working directory separately.
-    config = load_config(Path(__file__).parent / "config.yaml")
+    config_path = Path(__file__).parent / "config.yaml"
+    config = load_config(config_path)
     config.atlassian = resolve_atlassian_config(config.atlassian)
 
     data_dir = config.data_dir
@@ -391,6 +393,7 @@ def main() -> None:
         parser.error("--all-states requires --spec-monitor or --update-spec")
 
     with process_lock(data_dir):
+        annotate_config(config_path, config)
         if spec_mode:
             from digest.spec_monitor.cli import dispatch
             dispatch(args, config, cache_file, command_line)
