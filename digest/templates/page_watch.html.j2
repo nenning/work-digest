@@ -53,6 +53,13 @@
       background: #fff7ed; border-left: 4px solid #f97316; border-radius: 4px;
       padding: 8px 12px; margin: 0 0 8px; font-size: 13px; color: #9a3412;
     }
+    .trace {
+      background: #f5f3ff; border-left: 4px solid #8b5cf6; border-radius: 4px;
+      padding: 8px 12px; margin: 0 0 12px; font-size: 13px; line-height: 1.5;
+    }
+    .trace-head { font-weight: 600; margin-bottom: 4px; }
+    .trace-found { border-left-color: #f97316; background: #fff7ed; }
+    .trace .lst { font-size: 13px; }
     .cr { font-size: 14px; line-height: 1.7; }
     .cr p { margin: 0 0 12px; }
     .effort {
@@ -122,6 +129,7 @@
             {% for s in changed_links %}<li><a href="#{{ s.anchor }}">{{ s.title }}</a></li>{% endfor %}
           </ul>{% else %}<p class="meta">{{ L.no_changes }}</p>{% endif %}
           {% if counts.quiet %}<p class="meta">{{ counts.quiet }} {{ L.quiet }}</p>{% endif %}
+          {% if trace_off %}<p class="meta">{{ L.trace_off }}.</p>{% endif %}
         </div>
 
         {% for p in pages %}
@@ -137,6 +145,17 @@
           </p>
 
           {% if p.summary %}<ul class="lst changes">{% for s in p.summary %}<li>{{ s|linkify }}</li>{% endfor %}</ul>{% endif %}
+          {% if p.trace %}
+          <div class="trace trace-{{ p.trace.status|lower }}">
+            <div class="trace-head">{{ p.trace.headline }}</div>
+            {% set own = p.trace.refs|selectattr('own')|list %}
+            {% set found = p.trace.refs|rejectattr('own')|list %}
+            {% if found %}<ul class="lst">{% for r in found %}<li>{% if r.url %}<a href="{{ r.url|safe_url }}" target="_blank" rel="noopener">{{ r.label }}</a>{% else %}{{ r.label }}{% endif %} ({{ r.verdict }}){% if r.reason %}: {{ r.reason }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+            {% for r in own %}<div>{{ L.trace_prior_ticket }}: {% if r.url %}<a href="{{ r.url|safe_url }}" target="_blank" rel="noopener">{{ r.label }}</a>{% else %}{{ r.label }}{% endif %}</div>{% endfor %}
+            {% if p.trace.problems %}<ul class="lst">{% for x in p.trace.problems %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+            {% if p.trace.searched %}<div class="meta">{{ L.trace_searched }}: {{ p.trace.searched|join('; ') }}</div>{% endif %}
+          </div>
+          {% endif %}
           {% for d in p.detail %}<div class="warn">{{ d|linkify }}</div>{% endfor %}
 
           {% if p.delta_groups %}

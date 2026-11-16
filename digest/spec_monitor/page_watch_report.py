@@ -4,13 +4,13 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from jinja2 import Environment, FileSystemLoader
 
 from digest.email_sender import TEMPLATES_DIR, _safe_url
 from digest.spec_monitor import report as base
-from digest.spec_monitor.models import PageChange, PageStatus, PageWatchReport, ReportError
+from digest.spec_monitor.models import PageChange, PageStatus, PageTrace, PageWatchReport, ReportError
 
 _DE: Dict[str, str] = dict(base._DE)
 _DE.update({
@@ -38,6 +38,20 @@ _DE.update({
     "synthesis_warnings": "Hinweise zur Analyse",
     "subject_changes": "Seiten mit Änderungen",
     "no_data": "Keine Änderungen gefunden.",
+    "trace_found": "Vermutlich bereits CR / in Arbeit",
+    "trace_none": "Keine Hinweise gefunden, dass das bereits in Arbeit ist.",
+    "trace_frozen": "Seite ist frozen – keine Prüfung",
+    "trace_incomplete": "Prüfung nicht (vollständig) möglich",
+    "trace_searched": "Geprüft",
+    "trace_prior_ticket": "Früheres Delta-Ticket",
+    "trace_off": "Spurensuche nicht konfiguriert",
+    "in_progress": "in Arbeit",
+    "done_likely": "vermutlich erledigt",
+    "related": "verwandt",
+    "frozen": "frozen page",
+    "ticket": "Jira-Ticket erstellen",
+    "cr": "CR erstellen",
+    "done": "Erledigt:",
 })
 _EN: Dict[str, str] = dict(base._EN)
 _EN.update({
@@ -65,6 +79,20 @@ _EN.update({
     "synthesis_warnings": "Analysis notes",
     "subject_changes": "pages with changes",
     "no_data": "No changes found.",
+    "trace_found": "Likely already a CR / in progress",
+    "trace_none": "No indication found that this is already in progress.",
+    "trace_frozen": "Page is frozen – no check",
+    "trace_incomplete": "Check not (fully) possible",
+    "trace_searched": "Checked",
+    "trace_prior_ticket": "Earlier delta ticket",
+    "trace_off": "Trace check not configured",
+    "in_progress": "in progress",
+    "done_likely": "likely done",
+    "related": "related",
+    "frozen": "frozen page",
+    "ticket": "create Jira ticket",
+    "cr": "create CR",
+    "done": "Done:",
 })
 
 
@@ -131,6 +159,38 @@ def _without_inferred(vp):
     return replace(vp, inferred=False, inferred_reason="") if vp is not None else None
 
 
+_MAX_HINT_REFS = 3
+
+
+def _trace_row(trace: Optional[PageTrace], L: Dict[str, str]) -> Optional[dict]:
+    if trace is None:
+        return None
+    headline = {"FROZEN": L["trace_frozen"], "FOUND": L["trace_found"], "NONE": L["trace_none"]}.get(
+        trace.status, L["trace_incomplete"])
+    refs = [{"label": r.label, "url": base._link(r.url), "verdict": L.get(r.verdict, r.verdict),
+             "reason": r.reason, "own": r.own} for r in trace.references[:_MAX_HINT_REFS]]
+    frozen = trace.status == "FROZEN"
+    return {"status": trace.status, "headline": headline, "refs": [] if frozen else refs,
+            "searched": [] if frozen else list(trace.searched), "problems": [] if frozen else list(trace.problems)}
+
+
+def _trace_storage(t: dict, L: Dict[str, str]) -> str:
+    e, a = base._e, base._a
+    out = [f"<p><strong>{e(t['headline'])}</strong></p>"]
+    own = [r for r in t["refs"] if r["own"]]
+    items = [f"{a(r['url'], r['label'])} ({e(r['verdict'])})" + (f": {e(r['reason'])}" if r["reason"] else "")
+             for r in t["refs"] if not r["own"]]
+    if items:
+        out.append(base._ul(items))
+    for r in own:
+        out.append(f"<p>{e(L['trace_prior_ticket'])}: {a(r['url'], r['label'])}</p>")
+    if t["problems"]:
+        out.append(base._ul([e(p) for p in t["problems"]]))
+    if t["searched"]:
+        out.append(f"<p>{e(L['trace_searched'])}: {e('; '.join(t['searched']))}</p>")
+    return "".join(out)
+
+
 def _page_row(pc: PageChange, deltas: list, L: Dict[str, str]) -> dict:
     r = pc.result
     notes = [n for n in (r.diagram_notes if r else []) if not _is_raw_diagram_change(n)]
@@ -151,6 +211,7 @@ def _page_row(pc: PageChange, deltas: list, L: Dict[str, str]) -> dict:
         "summary": _bullets(pc.summary),
         "detail": detail,
         "delta_groups": base._delta_groups(deltas, L),
+        "trace": _trace_row(pc.trace, L),
     }
 
 
@@ -204,6 +265,7 @@ def render_mail_html(report: PageWatchReport) -> str:
         change_request=base._paragraphs(syn.change_request) if syn else [],
         other_delta_groups=base._delta_groups(other, L),
         problem_count=problem_count(report),
+        trace_off=not report.trace_enabled and bool(_changed(report)),
         errors=_all_errors(report),
         cache_corrupt_note=(f" ({L['footer_cache_corrupt']}: {report.cache_corrupt})" if report.cache_corrupt else ""),
     )
@@ -229,6 +291,8 @@ def render_confluence_storage(report: PageWatchReport) -> str:
                      f"{e(L['quiet'])}: {counts['quiet']}"]))
     if not _changed(report):
         parts.append(f"<p>{e(L['no_changes'])}</p>")
+    elif not report.trace_enabled:
+        parts.append(f"<p>{e(L['trace_off'])}.</p>")
 
     for pc in _changed(report):
         row = _page_row(pc, by_page.get(pc.title, []), L)
@@ -242,6 +306,8 @@ def render_confluence_storage(report: PageWatchReport) -> str:
         parts.append("<p>" + " | ".join(meta) + "</p>")
         if row["summary"]:
             parts.append(ul([e(p) for p in row["summary"]]))
+        if row["trace"]:
+            parts.append(_trace_storage(row["trace"], L))
         if row["detail"]:
             parts.append(macro("warning", ul([e(d) for d in row["detail"]])))
         delta = base._storage_delta(SimpleNamespace(delta_changes=by_page.get(pc.title, []), open_points=[]), L)

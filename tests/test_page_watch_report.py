@@ -2,8 +2,8 @@ from datetime import date, datetime
 
 from digest.spec_monitor import page_watch_report as pr
 from digest.spec_monitor.models import (
-    Classification, DeltaChange, EffortEstimate, OpenPoint, PageChange, PageStatus, PageWatchReport, ReportError,
-    SourceKind, SourceRef, SourceResult, Theme, VersionPoint, WatchSynthesis,
+    Classification, DeltaChange, EffortEstimate, OpenPoint, PageChange, PageStatus, PageTrace, PageWatchReport,
+    ReportError, SourceKind, SourceRef, SourceResult, Theme, TraceReference, VersionPoint, WatchSynthesis,
 )
 
 
@@ -200,3 +200,86 @@ def test_weekly_header_names_the_week_and_both_dates():
 def test_rolling_header_is_unchanged():
     html = pr.render_mail_html(_report())
     assert "KW" not in html.split("Zeitraum", 1)[1][:200] and "2026-10-31 bis 2026-11-13 (14)" in html
+def _ref(ref="PSSA-1", verdict="in_progress", own=False, url="https://j/PSSA-1", reason="Ticket zu Retry"):
+    return TraceReference("jira", ref, f"{ref} Retry", url, verdict, reason, own)
+
+
+def _traced(trace, lang="de", enabled=True, **kw):
+    pages = [_page("10", "Batch", summary="Retry von 3 auf 5", trace=trace)]
+    return _report(pages=pages, trace_enabled=enabled, language=lang, **kw)
+
+
+def _both(report):
+    return pr.render_mail_html(report), pr.render_confluence_storage(report)
+
+
+def test_found_trace_shows_headline_and_at_most_three_references():
+    refs = [_ref(f"PSSA-{i}", reason=f"Grund {i}") for i in range(1, 6)]
+    refs.append(_ref("PSSA-9", "done_likely"))
+    for out in _both(_traced(PageTrace("FOUND", refs, searched=["Jira PSSA: x"]))):
+        assert "Vermutlich bereits CR / in Arbeit" in out
+        assert out.count("https://j/PSSA-") == 3 and "PSSA-4" not in out
+        assert "in Arbeit" in out and "Grund 1" in out and "Geprüft:" in out
+
+
+def test_verdict_labels():
+    refs = [_ref("A-1", "done_likely"), _ref("A-2", "related")]
+    for out in _both(_traced(PageTrace("FOUND", refs))):
+        assert "vermutlich erledigt" in out and "verwandt" in out
+
+
+def test_none_trace_says_no_hints_with_the_searched_line_and_prior_ticket():
+    trace = PageTrace("NONE", [_ref("PSSA-7", "related", own=True, reason="")],
+                      searched=["Jira PSSA: 90 Tage", "Code: kein Repository"])
+    for out in _both(_traced(trace)):
+        assert "Keine Hinweise gefunden, dass das bereits in Arbeit ist." in out
+        assert "Geprüft:" in out and "Code: kein Repository" in out
+        assert "Früheres Delta-Ticket" in out and "PSSA-7" in out
+        assert "Vermutlich bereits CR" not in out
+    plain = _traced(PageTrace("NONE", searched=["Jira PSSA"]))
+    for out in _both(plain):
+        assert "Früheres Delta-Ticket" not in out
+
+
+def test_frozen_trace_shows_only_the_frozen_text():
+    for out in _both(_traced(PageTrace("FROZEN", searched=["x"]))):
+        assert "Seite ist frozen – keine Prüfung" in out and "Geprüft:" not in out
+
+
+def test_incomplete_trace_shows_problem_and_never_the_none_sentence():
+    trace = PageTrace("INCOMPLETE", searched=["Jira PSSA"], problems=["Jira search failed: HTTP 500"])
+    for out in _both(_traced(trace)):
+        assert "Prüfung nicht (vollständig) möglich" in out and "HTTP 500" in out
+        assert "Keine Hinweise gefunden" not in out
+
+
+def test_no_trace_means_no_hint_line_and_a_single_not_configured_note():
+    html, storage = _both(_traced(None, enabled=False))
+    for out in (html, storage):
+        assert out.count("Spurensuche nicht konfiguriert") == 1
+        assert "Keine Hinweise" not in out and "Geprüft:" not in out
+    html, storage = _both(_traced(None, enabled=True))
+    assert "Spurensuche nicht konfiguriert" not in html + storage
+
+
+def test_trace_enabled_report_has_no_not_configured_note():
+    html, storage = _both(_traced(PageTrace("NONE", searched=["Jira"])))
+    assert "Spurensuche nicht konfiguriert" not in html + storage
+
+
+def test_english_trace_labels():
+    for out in _both(_traced(PageTrace("FOUND", [_ref()], searched=["Jira"]), lang="en")):
+        assert "Likely already a CR / in progress" in out and "Checked:" in out and "in progress" in out
+        assert "Vermutlich" not in out
+    for out in _both(_traced(PageTrace("NONE", searched=["Jira"]), lang="en")):
+        assert "No indication found that this is already in progress." in out
+    html, storage = _both(_traced(None, lang="en", enabled=False))
+    assert "Trace check not configured" in html and "Trace check not configured" in storage
+
+
+def test_trace_texts_are_escaped_and_unsafe_urls_dropped():
+    ref = _ref(url="javascript:alert(1)", reason="<b>x</b>")
+    ref.label = "<i>l</i>"
+    for out in _both(_traced(PageTrace("FOUND", [ref], searched=["<s>"]))):
+        assert "<b>x</b>" not in out and "<i>l</i>" not in out and "<s>" not in out
+        assert "javascript:" not in out
