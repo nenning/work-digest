@@ -705,3 +705,81 @@ def test_spec_monitor_ticket_new_fields_default(tmp_path):
     t = _load(tmp_path, SPEC_MONITOR_YAML + "  ticket:\n    project: PROJ\n").spec_monitor.ticket
     assert t.priority is None and t.team_id is None and t.parent is None
     assert t.fields == {} and t.remote_link is True
+
+
+# ---------------------------------------------------------------------------
+# page_watch trace / ticket, gitlab local_path
+# ---------------------------------------------------------------------------
+
+PAGE_WATCH_YAML = """
+page_watch:
+  parent_page_id: "41484320"
+"""
+
+TRACE_GITLAB_YAML = """
+gitlab:
+  url: https://gitlab.example.com
+  api_token: glpat-xyz
+  repositories:
+    - name: application
+      project: group/application
+      local_path: ~/work/application
+"""
+
+
+def test_trace_defaults_jira_projects_from_atlassian_projects(tmp_path):
+    pw = _load(tmp_path, PAGE_WATCH_YAML + "  trace:\n    lookback_days: 30\n").page_watch
+    assert pw.trace.jira_projects == ["PROJ"] and pw.trace.lookback_days == 30 and pw.trace.repositories == []
+
+
+def test_trace_block_absent_is_none(tmp_path):
+    assert _load(tmp_path, PAGE_WATCH_YAML).page_watch.trace is None
+
+
+def test_trace_explicit_projects_and_repositories(tmp_path):
+    yaml_text = TRACE_GITLAB_YAML + PAGE_WATCH_YAML + (
+        "  trace:\n    jira_projects: [PSSA, RMEG]\n    repositories: [application]\n")
+    cfg = _load(tmp_path, yaml_text)
+    assert cfg.page_watch.trace.jira_projects == ["PSSA", "RMEG"]
+    assert cfg.page_watch.trace.repositories == ["application"] and cfg.page_watch.trace.lookback_days == 90
+    assert cfg.gitlab.repositories[0].local_path == Path("~/work/application").expanduser()
+
+
+@pytest.mark.parametrize("value", [0, -1, "x"])
+def test_trace_lookback_must_be_positive(tmp_path, value):
+    with pytest.raises(ValueError, match="lookback_days"):
+        _load(tmp_path, PAGE_WATCH_YAML + f"  trace:\n    lookback_days: {value}\n")
+
+
+def test_trace_unknown_repository_names_the_configured_ones(tmp_path):
+    yaml_text = TRACE_GITLAB_YAML + PAGE_WATCH_YAML + "  trace:\n    repositories: [nope]\n"
+    with pytest.raises(ValueError, match=r"nope.*configured: \['application'\]"):
+        _load(tmp_path, yaml_text)
+
+
+def test_trace_repositories_need_a_gitlab_block(tmp_path):
+    with pytest.raises(ValueError, match="needs a gitlab block"):
+        _load(tmp_path, PAGE_WATCH_YAML + "  trace:\n    repositories: [application]\n")
+
+
+def test_gitlab_repository_without_local_path_or_docs_folder(tmp_path):
+    cfg = _load(tmp_path, "gitlab:\n  url: https://g.example\n  api_token: t\n  repositories:\n"
+                          "    - name: app\n      project: g/app\n")
+    repo = cfg.gitlab.repositories[0]
+    assert repo.local_path is None and repo.docs_folders == [""]
+
+
+def test_page_watch_ticket_block_and_fallback(tmp_path):
+    from digest.config import page_watch_ticket
+    own = _load(tmp_path, PAGE_WATCH_YAML + "  ticket:\n    project: PSSA\n    labels: [a]\n")
+    assert own.page_watch.ticket.project == "PSSA" and own.page_watch.ticket.labels == ["a"]
+    assert page_watch_ticket(own).project == "PSSA"
+    both = _load(tmp_path, SPEC_MONITOR_YAML + "  ticket:\n    project: RMEG\n" + PAGE_WATCH_YAML)
+    assert both.page_watch.ticket is None and page_watch_ticket(both).project == "RMEG"
+    with pytest.raises(ValueError, match="page_watch.ticket"):
+        page_watch_ticket(_load(tmp_path, PAGE_WATCH_YAML))
+
+
+def test_page_watch_ticket_requires_project(tmp_path):
+    with pytest.raises(ValueError, match="page_watch.ticket.project is required"):
+        _load(tmp_path, PAGE_WATCH_YAML + "  ticket:\n    issue_type: Bug\n")

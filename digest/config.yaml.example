@@ -145,11 +145,13 @@ data_dir: ~/.digest
 #     link_type: Relates                 # link to the Jira tickets named on the spec page
 
 # Page watch (--page-watch flag). Optional, independent of spec_monitor. Reports what changed on a Confluence
-# page and all pages below it in the last N days: changes per page, overall summary, change request,
-# delta specification, effort. No state: every run looks at the last window_days days.
+# page and all pages below it in the previous calendar week (Mon-Sun): changes per page, overall summary,
+# change request, delta specification, effort. No state: every run answers "what changed in the window".
 # page_watch:
 #   parent_page_id: "41484320"           # this page and all its descendants are watched
-#   window_days: 14                      # default 14; --days N overrides
+#   window_days: 14                      # optional: a rolling window of N days up to now instead of the previous
+#                                        # calendar week; --days N and --week KW44-2026 override either
+#   freeze_label: frozen                 # default; pages with this label are not traced and get no "frozen page" box
 #   label: ""                            # optional: only descendants with this label (the parent is always included)
 #   include_parent: true                 # default true
 #   recipient: ""                        # optional — falls back to spec_monitor.recipient, mgmt_summary.recipient, email.recipient
@@ -161,6 +163,14 @@ data_dir: ~/.digest
 #     timeout_seconds: 60
 #   confluence_page:
 #     parent_page_id: "..."              # where --publish-page creates the report page; required only for that flag
+#   trace:                               # optional: per changed page, look for traces that it is already in progress / done
+#     jira_projects: [PSSA]              # default: the project keys of atlassian.projects
+#     lookback_days: 90                  # only tickets updated within this many days before the window end
+#     repositories: [application]        # names from gitlab.repositories whose code is searched
+#   ticket:                              # for --page-watch-apply (ticket per page and week); same keys as spec_monitor.ticket,
+#     project: PSSA                      # falls back to spec_monitor.ticket when omitted
+#     issue_type: Task
+#     labels: []
 
 # GitLab connection for repository sources (ADRs, API concept in the diagram repo).
 # Optional; without it repo sources are listed as "not monitored". Only the doc folder of each
@@ -174,6 +184,8 @@ data_dir: ~/.digest
 #     - name: application
 #       project: group/application       # full "group/project" path or numeric project id
 #       docs_folder: docs                # folder (or list: docs_folders: [docs, architecture]) searched for documents
+#       # local_path: C:\workpplication # optional local clone: the page-watch trace pass searches it first (finds what
+#                                          # exists; open merge requests and branches always come from the API)
 #       # default_branch: main
 #     - name: Diagramm-Repository        # text in a source row that selects this repository (default: the name)
 #       project: group/diagrams

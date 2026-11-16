@@ -162,6 +162,7 @@ class GitLabRepoConfig:
     match: List[str] = field(default_factory=list)  # text in a source row that selects this repo (default: [name])
     documents: List[GitLabDocumentAlias] = field(default_factory=list)   # optional explicit name -> path aliases
     docs_folders: List[str] = field(default_factory=list)  # folders searched for documents; "" = repository root
+    local_path: Optional[Path] = None              # local clone searched first by the page-watch trace pass
 
 
 @dataclass
@@ -218,6 +219,13 @@ class SpecMonitorConfig:
 
 
 @dataclass
+class PageWatchTraceConfig:
+    jira_projects: List[str] = field(default_factory=list)
+    lookback_days: int = 90
+    repositories: List[str] = field(default_factory=list)   # names from gitlab.repositories whose code is searched
+
+
+@dataclass
 class PageWatchConfig:
     parent_page_id: str
     window_days: Optional[int] = None              # None = previous calendar week
@@ -229,6 +237,8 @@ class PageWatchConfig:
     retry: RetryConfig = field(default_factory=RetryConfig)
     publish_parent_page_id: Optional[str] = None   # confluence_page.parent_page_id
     freeze_label: str = "frozen"                   # pages with this label are not checked and cannot be frozen again
+    trace: Optional[PageWatchTraceConfig] = None
+    ticket: Optional[TicketConfig] = None          # for --page-watch-apply; falls back to spec_monitor.ticket
 
 
 @dataclass
@@ -311,6 +321,49 @@ def _positive_int(value, key: str) -> int:
     return number
 
 
+def _load_trace(raw: Optional[dict]) -> Optional[PageWatchTraceConfig]:
+    if not raw:
+        return None
+    projects = raw.get("jira_projects")
+    if projects is not None and not isinstance(projects, (list, tuple)):
+        projects = [projects]
+    repos = raw.get("repositories")
+    if repos is not None and not isinstance(repos, (list, tuple)):
+        repos = [repos]
+    return PageWatchTraceConfig(
+        jira_projects=[str(p).strip() for p in (projects or []) if str(p).strip()],
+        lookback_days=_positive_int(raw.get("lookback_days", 90), "page_watch.trace.lookback_days"),
+        repositories=[str(r).strip() for r in (repos or []) if str(r).strip()],
+    )
+
+
+def _validate_page_watch_trace(pw: Optional[PageWatchConfig], atlassian: AtlassianConfig,
+                               gitlab: Optional[GitLabConfig]) -> None:
+    if pw is None or pw.trace is None:
+        return
+    trace = pw.trace
+    if not trace.jira_projects:
+        trace.jira_projects = [p.jira.project for p in atlassian.projects]
+    if trace.repositories:
+        if gitlab is None:
+            raise ValueError("page_watch.trace.repositories needs a gitlab block")
+        configured = [r.name for r in gitlab.repositories]
+        for name in trace.repositories:
+            if name.casefold() not in (c.casefold() for c in configured):
+                raise ValueError(
+                    f"page_watch.trace.repositories: {name!r} is not a configured gitlab repository; "
+                    f"configured: {configured}")
+
+
+def page_watch_ticket(config: "Config") -> TicketConfig:
+    """Ticket settings for --page-watch-apply: page_watch.ticket, else spec_monitor.ticket."""
+    if config.page_watch is not None and config.page_watch.ticket is not None:
+        return config.page_watch.ticket
+    if config.spec_monitor is not None and config.spec_monitor.ticket is not None:
+        return config.spec_monitor.ticket
+    raise ValueError("page_watch.ticket (or spec_monitor.ticket) is required to create tickets")
+
+
 def _load_page_watch(raw: Optional[dict]) -> Optional[PageWatchConfig]:
     if not raw:
         return None
@@ -341,6 +394,27 @@ def _load_page_watch(raw: Optional[dict]) -> Optional[PageWatchConfig]:
         retry=retry,
         publish_parent_page_id=str(publish) if publish else None,
         freeze_label=freeze_label,
+        trace=_load_trace(raw.get("trace")),
+        ticket=_load_ticket(raw.get("ticket"), "page_watch.ticket"),
+    )
+
+
+def _load_ticket(ticket_raw: Optional[dict], key: str) -> Optional[TicketConfig]:
+    if not ticket_raw:
+        return None
+    if not ticket_raw.get("project"):
+        raise ValueError(f"{key}.project is required when a ticket block is present")
+    return TicketConfig(
+        project=str(ticket_raw["project"]),
+        issue_type=str(ticket_raw.get("issue_type", "Task")),
+        labels=[str(x) for x in (ticket_raw.get("labels") or [])],
+        link_type=str(ticket_raw.get("link_type", "Relates")),
+        priority=str(ticket_raw["priority"]) if ticket_raw.get("priority") else None,
+        team_id=str(ticket_raw["team_id"]) if ticket_raw.get("team_id") else None,
+        team_field=str(ticket_raw.get("team_field", "customfield_10001")),
+        parent=str(ticket_raw["parent"]) if ticket_raw.get("parent") else None,
+        fields=dict(ticket_raw.get("fields") or {}),
+        remote_link=bool(ticket_raw.get("remote_link", True)),
     )
 
 
@@ -387,22 +461,7 @@ def _load_spec_monitor(raw: Optional[dict]) -> Optional[SpecMonitorConfig]:
     if not 0 <= cfg.link_depth <= MAX_LINK_DEPTH or cfg.link_max_pages < 1:
         raise ValueError(f"spec_monitor.reference_check.link_depth must be 0..{MAX_LINK_DEPTH} (0 = off) "
                          "and spec_monitor.reference_check.max_pages at least 1")
-    ticket_raw = raw.get("ticket")
-    if ticket_raw:
-        if not ticket_raw.get("project"):
-            raise ValueError("spec_monitor.ticket.project is required when a ticket block is present")
-        cfg.ticket = TicketConfig(
-            project=str(ticket_raw["project"]),
-            issue_type=str(ticket_raw.get("issue_type", "Task")),
-            labels=[str(x) for x in (ticket_raw.get("labels") or [])],
-            link_type=str(ticket_raw.get("link_type", "Relates")),
-            priority=str(ticket_raw["priority"]) if ticket_raw.get("priority") else None,
-            team_id=str(ticket_raw["team_id"]) if ticket_raw.get("team_id") else None,
-            team_field=str(ticket_raw.get("team_field", "customfield_10001")),
-            parent=str(ticket_raw["parent"]) if ticket_raw.get("parent") else None,
-            fields=dict(ticket_raw.get("fields") or {}),
-            remote_link=bool(ticket_raw.get("remote_link", True)),
-        )
+    cfg.ticket = _load_ticket(raw.get("ticket"), "spec_monitor.ticket")
     if raw.get("excluded_source_markers") is not None:
         cfg.excluded_source_markers = [str(s) for s in raw["excluded_source_markers"]]
     return cfg
@@ -441,6 +500,7 @@ def _load_gitlab(raw: Optional[dict]) -> Optional[GitLabConfig]:
             match=[str(m) for m in (r.get("match") or [str(r["name"])])],
             documents=[GitLabDocumentAlias(match=d["match"], path=d["path"]) for d in (r.get("documents") or [])],
             docs_folders=folders,
+            local_path=Path(str(r["local_path"])).expanduser() if r.get("local_path") else None,
         ))
     default = raw.get("default_project") or None
     if default is not None:
@@ -546,7 +606,7 @@ def load_config(path: Path) -> Config:
     if vision_model is not None and not isinstance(vision_model, str):
         raise ValueError(f"llm.vision_model must be a single model name, got: {vision_model!r}")
 
-    return Config(
+    config = Config(
         atlassian=AtlassianConfig(
             url=a["url"].rstrip("/"),
             email=a["email"],
@@ -583,3 +643,5 @@ def load_config(path: Path) -> Config:
         gitlab=_load_gitlab(raw.get("gitlab")),
         page_watch=_load_page_watch(raw.get("page_watch")),
     )
+    _validate_page_watch_trace(config.page_watch, config.atlassian, config.gitlab)
+    return config
