@@ -49,6 +49,19 @@ _DE.update({
     "in_progress": "in Arbeit",
     "done_likely": "vermutlich erledigt",
     "related": "verwandt",
+    "intro_title": "Über diese Seite",
+    "intro_shows": "Diese Seite zeigt, was sich im genannten Zeitraum auf den überwachten Spezifikationsseiten geändert hat: "
+                   "pro geänderter oder neuer Seite eine Kurzfassung der Änderung mit den zugehörigen Delta-Punkten, "
+                   "am Ende eine Gesamtzusammenfassung mit Änderungsantrag, offenen Punkten und einer groben Aufwandsschätzung "
+                   "(KI-generiert, bitte prüfen; die Aufwandsfelder sind bewusst leer).",
+    "intro_trace": "Unter jeder Seite steht ein Hinweis, ob in Jira oder im Quellcode Spuren gefunden wurden, dass die Änderung "
+                   "bereits in Arbeit oder umgesetzt ist (höchstens 3 Verweise). Das sind Hinweise, kein Beweis.",
+    "intro_boxes": "Die Checkboxen unter jeder Seite lösen noch nichts aus. Erst der Befehl --page-watch-apply wertet die "
+                   "angekreuzten Boxen aus; danach erscheinen sie als erledigte Zeilen:",
+    "intro_box_reject": "Änderung ablehnen: nur eine Markierung für das Team. Es passiert nichts damit.",
+    "intro_box_frozen": "frozen page: setzt das Label frozen auf der Spezifikationsseite (nur sichtbar, wenn die Seite es noch nicht hat).",
+    "intro_box_ticket": "Jira-Ticket erstellen: legt ein Ticket mit der Delta-Spezifikation dieser Seite und Woche an.",
+    "intro_box_cr": "CR erstellen: nimmt die Seite in die lokale CR-Datei der Woche auf (Grundlage für ein späteres gemeinsames CR-Ticket).",
     "reject": "Änderung ablehnen",
     "frozen": "frozen page",
     "ticket": "Jira-Ticket erstellen",
@@ -91,6 +104,19 @@ _EN.update({
     "in_progress": "in progress",
     "done_likely": "likely done",
     "related": "related",
+    "intro_title": "About this page",
+    "intro_shows": "This page shows what changed on the watched specification pages in the given window: for every changed or "
+                   "new page a short summary of the change with its delta items, and at the end an overall summary with "
+                   "change request, open points and a rough effort estimate (AI-generated, please verify; the effort "
+                   "fields are intentionally empty).",
+    "intro_trace": "Below each page a hint says whether Jira or the source code show traces that the change is already in "
+                   "progress or done (at most 3 references). These are hints, not proof.",
+    "intro_boxes": "The checkboxes below each page do not trigger anything yet. Only the command --page-watch-apply "
+                   "evaluates the ticked boxes; afterwards they show up as done lines:",
+    "intro_box_reject": "reject change: only a marker for the team. Nothing is done with it.",
+    "intro_box_frozen": "frozen page: sets the label frozen on the specification page (only shown if the page does not have it yet).",
+    "intro_box_ticket": "create Jira ticket: creates a ticket with the delta specification of this page and week.",
+    "intro_box_cr": "create CR: adds the page to the local CR file of the week (basis for a combined CR ticket later).",
     "reject": "reject change",
     "frozen": "frozen page",
     "ticket": "create Jira ticket",
@@ -274,6 +300,18 @@ def render_mail_html(report: PageWatchReport) -> str:
     )
 
 
+def render_intro(language: str, *, trace_enabled: bool, with_boxes: bool) -> str:
+    L = _DE if (language or "de").lower().startswith("de") else _EN
+    e = base._e
+    body = [f"<p>{e(L['intro_shows'])}</p>"]
+    if trace_enabled:
+        body.append(f"<p>{e(L['intro_trace'])}</p>")
+    if with_boxes:
+        body.append(f"<p>{e(L['intro_boxes'])}</p>")
+        body.append(base._ul([e(L[k]) for k in ("intro_box_reject", "intro_box_frozen", "intro_box_ticket", "intro_box_cr")]))
+    return base._macro("info", f"<p><strong>{e(L['intro_title'])}</strong></p>" + "".join(body))
+
+
 def render_confluence_storage(report: PageWatchReport, *, actions: Optional[WatchData] = None) -> str:
     L = _labels(report)
     entries = {p.page_id: p for p in actions.pages} if actions else {}
@@ -286,6 +324,7 @@ def render_confluence_storage(report: PageWatchReport, *, actions: Optional[Watc
     parts.append(f"<h1>{e(L['title'])}: {a(report.parent_url, report.parent_title)}</h1>")
     parts.append(f"<p>{e(L['window'])}: {e(_window(report))} | {e(L['generated'])}: "
                  f"{e(report.generated_at.strftime('%Y-%m-%d %H:%M'))}</p>")
+    parts.append(render_intro(report.language, trace_enabled=report.trace_enabled, with_boxes=actions is not None))
     if errors:
         parts.append(macro("warning", f"<p>{len(errors)} {e(L['problems'])} {e(L['errors'])}.</p>"))
 

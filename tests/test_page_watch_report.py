@@ -179,7 +179,7 @@ def test_confluence_storage_has_empty_effort_placeholders_and_no_ai_estimate():
     assert "Änderungsantrag" in storage and "Delta-Spezifikation" in storage and "Gesamtzusammenfassung" in storage
     assert "3-5" not in storage and "ein Modul" not in storage
     assert "<p />" in storage
-    assert storage.index("Batch") < storage.index("Gesamtzusammenfassung")
+    assert storage.index("<h2>Batch</h2>") < storage.index("<h2>Gesamtzusammenfassung")
 
 
 def test_confluence_storage_lists_errors_and_escapes():
@@ -308,7 +308,8 @@ def test_task_boxes_come_after_the_hint_and_before_the_delta():
     report, data = _actions_report(trace_enabled=True)
     report.pages[0].trace = PageTrace("NONE", searched=["Jira PSSA"])
     storage = pr.render_confluence_storage(report, actions=data)
-    assert storage.index("Keine Hinweise") < storage.index("<ac:task-id>12</ac:task-id>") < storage.index("Delta-Spezifikation")
+    page = storage[storage.index("<h2>Batch</h2>"):]
+    assert page.index("Keine Hinweise") < page.index("<ac:task-id>12</ac:task-id>") < page.index("<h3>Delta-Spezifikation")
 
 
 def test_english_task_labels():
@@ -329,3 +330,37 @@ def test_storage_without_actions_has_no_tasks():
     report, _ = _actions_report()
     assert "<ac:task" not in pr.render_confluence_storage(report)
     assert "<ac:task" not in pr.render_mail_html(report)
+
+
+def test_confluence_intro_explains_the_page_and_the_boxes():
+    from digest.spec_monitor.page_watch_data import build_data
+    from digest.spec_monitor.week import parse_week
+    week = parse_week("KW44-2026", date(2026, 11, 15))
+    report = _report(week=week, window_start=week.start, window_end=week.end, trace_enabled=True)
+    storage = pr.render_confluence_storage(report, actions=build_data(report, "frozen"))
+    assert storage.count('ac:name="info"') == 1
+    for text in ("Über diese Seite", "Diese Seite zeigt", "Hinweise, kein Beweis", "--page-watch-apply",
+                 "Änderung ablehnen: nur eine Markierung", "frozen page: setzt das Label", "Jira-Ticket erstellen: legt",
+                 "CR erstellen: nimmt"):
+        assert text in storage
+    assert storage.index('ac:name="info"') < storage.index("<h2>")
+
+
+def test_confluence_intro_without_boxes_and_without_trace_stays_short():
+    storage = pr.render_confluence_storage(_report())
+    assert "Diese Seite zeigt" in storage
+    assert "--page-watch-apply" not in storage and "Hinweise, kein Beweis" not in storage
+
+
+def test_confluence_intro_in_english():
+    from digest.spec_monitor.page_watch_data import build_data
+    from digest.spec_monitor.week import parse_week
+    week = parse_week("KW44-2026", date(2026, 11, 15))
+    report = _report(week=week, window_start=week.start, window_end=week.end, language="en")
+    storage = pr.render_confluence_storage(report, actions=build_data(report, "frozen"))
+    assert "About this page" in storage and "reject change: only a marker" in storage
+    assert "Über diese Seite" not in storage
+
+
+def test_mail_has_no_intro_box():
+    assert "Über diese Seite" not in pr.render_mail_html(_report())
