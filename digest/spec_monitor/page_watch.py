@@ -259,6 +259,13 @@ def run_page_watch(
                 scope=parent_title, message=f"overall summary / change request / delta spec generation failed: {exc}",
                 impact="the changes per page are shown, but no overall summary, change request, delta spec or effort"))
 
+    if pw.trace is not None:
+        from digest.spec_monitor.page_trace import run_trace  # page_trace imports is_frozen from here
+        report.trace_enabled = True
+        if changed:
+            run_trace(config, report, auth_header=get_auth_header(config.atlassian), today=today, progress=progress,
+                      cache=cache)
+
     report.cache_hits = cache.hits
     report.cache_misses = cache.misses
     report.cache_corrupt = cache.corrupt
