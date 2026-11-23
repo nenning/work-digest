@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import dataclasses
 import json
 import logging
 import re
@@ -382,6 +383,143 @@ def _format_new_ticket(item: SourceItem, description_summary: str | None = None,
     )
 
 
+# Per LLM call: _LLM_ATTEMPTS rounds over all configured models, sleeping between rounds.
+_LLM_ATTEMPTS = 3
+_LLM_BACKOFF_SECONDS = (2.0, 6.0)
+# Client errors a retry cannot fix (bad key, unknown model, rejected request).
+_PERMANENT_STATUS_CODES = {400, 401, 403, 404, 422}
+
+
+def _backoff_sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _is_permanent_error(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) in _PERMANENT_STATUS_CODES
+
+
+_PRIORITY_RANK = {"action_needed": 0, "meeting_invite": 1, "fyi": 2, "info": 3}
+_SPLIT_SEPARATORS = ("\n\n", "\n", ". ", " ")
+
+
+def _split_content(text: str, max_chars: int = _CONTENT_MAX_CHARS) -> list[str]:
+    """Split text into balanced chunks of at most max_chars, cutting at paragraph, line, sentence or word boundaries."""
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    rest = text.strip()
+    while len(rest) > max_chars:
+        # Re-derived each round so boundary-driven short cuts don't leave a tiny tail chunk.
+        n_chunks = -(-len(rest) // max_chars)
+        target = -(-len(rest) // n_chunks)
+        limit = min(max_chars, target + (max_chars - target) // 2)
+        window = rest[:limit]
+        cut = limit
+        for sep in _SPLIT_SEPARATORS:
+            idx = window.rfind(sep, target // 2)
+            if idx != -1:
+                cut = idx + len(sep)
+                break
+        chunks.append(rest[:cut].strip())
+        rest = rest[cut:].strip()
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
+def _build_combine_prompt(item: SourceItem, partials: list[str], language: str) -> str:
+    lang = _language_name(language)
+    numbered = "\n".join(f"{i}. {p}" for i, p in enumerate(partials, 1))
+    return (
+        f"The following are partial summaries of consecutive sections of one {item.source} item ('{item.title}').\n"
+        f"Merge them into ONE compact, keyword-focused summary in {lang}: short telegraphic phrases, "
+        f"incomplete sentences are fine. Remove duplicates, keep every action item, deadline, decision, name and number. "
+        f"Describe only actual content, never structure or formatting. "
+        f"Do NOT repeat or paraphrase the title or ticket key.\n\n"
+        f"Partial summaries:\n{numbered}\n\n"
+        'Respond with JSON only: {"summary": "..."}'
+    )
+
+
+def _call_with_failover(
+    prompt: str, config: LLMConfig, assigned_model: str, label: str,
+) -> tuple[str | None, tuple[str, float] | None, list[str], list[tuple[str, Exception]]]:
+    """Try the assigned model, then the others; if all fail, back off and repeat (up to _LLM_ATTEMPTS rounds).
+
+    Returns (raw | None, (model, elapsed) | None, failed_models, errors); errors are from the last round only.
+    """
+    failed: list[str] = []
+    errors: list[tuple[str, Exception]] = []
+    for attempt in range(_LLM_ATTEMPTS):
+        if attempt:
+            _backoff_sleep(_LLM_BACKOFF_SECONDS[attempt - 1])
+        errors = []
+        for model in _models_to_try(assigned_model, config):
+            try:
+                raw, elapsed = _call_llm_timed(prompt, config, model)
+                return raw, (model, elapsed), failed, errors
+            except Exception as exc:
+                errors.append((model, exc))
+                failed.append(model)
+                log.debug("Model %s failed for '%s' (attempt %d/%d): %s", model, label[:40], attempt + 1, _LLM_ATTEMPTS, exc)
+        if all(_is_permanent_error(e) for _, e in errors):
+            break
+    return None, None, failed, errors
+
+
+def _summarize_text(
+    item: SourceItem,
+    config: LLMConfig,
+    assigned_model: str,
+    language: str,
+    chunks: list[str],
+    build_prompt,
+):
+    """Summarize chunks (one LLM call each, with model failover) and merge the partial summaries.
+
+    Returns (summary | _SKIP | None, priority, (model, elapsed) | None, failed_models, errors).
+    summary is None when a chunk failed on every model; _SKIP when every chunk was skipped by the LLM.
+    """
+    failed_models: list[str] = []
+    errors: list[tuple[str, Exception]] = []
+    timing: tuple[str, float] | None = None
+    parts: list[tuple[str, str]] = []
+
+    for chunk in chunks:
+        raw, t, failed, errs = _call_with_failover(build_prompt(chunk), config, assigned_model, item.title)
+        failed_models += failed
+        errors += errs
+        if raw is None:
+            return None, item.priority, None, failed_models, errors
+        timing = t
+        result, priority = _parse_response(raw, item)
+        if result is not _SKIP:
+            parts.append((result, priority))
+
+    if not parts:
+        return _SKIP, item.priority, timing, failed_models, errors
+
+    priority = min((p for _, p in parts), key=lambda p: _PRIORITY_RANK.get(p, len(_PRIORITY_RANK)))
+    if len(parts) == 1:
+        return parts[0][0], priority, timing, failed_models, errors
+
+    raw, t, failed, _errs = _call_with_failover(
+        _build_combine_prompt(item, [s for s, _ in parts], language), config, assigned_model, item.title,
+    )
+    failed_models += failed
+    merged = None
+    if raw is not None:
+        timing = t
+        merged, _ = _parse_response(raw, item)
+    if merged is None or merged is _SKIP:
+        problems.report(
+            "llm", f"Could not merge {len(parts)} partial summaries for '{item.title[:60]}'; showing them joined",
+            lossy=False,
+        )
+        merged = " ".join(s for s, _ in parts)
+    return merged, priority, timing, failed_models, errors
+
+
 def _summarize_new_ticket(
     item: SourceItem,
     config: LLMConfig,
@@ -395,24 +533,19 @@ def _summarize_new_ticket(
     timing: tuple[str, float] | None = None
     failed_models: list[str] = []
     if desc:
-        raw = None
-        errors: list[tuple[str, Exception]] = []
-        for model in _models_to_try(assigned_model, config):
-            try:
-                raw, elapsed = _call_llm_timed(_build_description_prompt(item, language), config, model)
-                timing = (model, elapsed)
-                break
-            except Exception as exc:
-                errors.append((model, exc))
-                failed_models.append(model)
-                log.debug("Model %s failed for '%s': %s", model, item.title[:40], exc)
-        if raw is None:
+        def build(chunk: str) -> str:
+            return _build_description_prompt(
+                dataclasses.replace(item, metadata={**item.metadata, "description": chunk}), language,
+            )
+
+        result, _, timing, failed_models, errors = _summarize_text(
+            item, config, assigned_model, language, _split_content(desc), build,
+        )
+        if result is None:
             detail = "; ".join(f"{m}: {e}" for m, e in errors)
             notice = f"LLM unavailable for '{item.title[:60]}': {detail}"
-        else:
-            result, _ = _parse_response(raw, item)
-            if result is not _SKIP:
-                desc_summary = result
+        elif result is not _SKIP:
+            desc_summary = result
     return _format_new_ticket(item, desc_summary, language), notice, timing, failed_models
 
 
@@ -424,44 +557,32 @@ def _summarize_one_item(
 ) -> tuple[SummarizedItem | None, str | None, tuple[str, float] | None, list[str]]:
     """Returns (SummarizedItem | None, notice | None, (model, elapsed) | None, failed_models).
     Returns None as first element for Confluence cosmetic-only skips. Never raises.
+    Content over _CONTENT_MAX_CHARS is split, summarized per chunk and merged.
     """
-    prompt = _build_prompt(item, language)
-    raw = None
-    notice = None
-    timing: tuple[str, float] | None = None
-    failed_models: list[str] = []
-    errors: list[tuple[str, Exception]] = []
-    for model in _models_to_try(assigned_model, config):
-        try:
-            raw, elapsed = _call_llm_timed(prompt, config, model)
-            timing = (model, elapsed)
-            break
-        except Exception as exc:
-            errors.append((model, exc))
-            failed_models.append(model)
-            log.debug("Model %s failed for '%s': %s", model, item.title[:40], exc)
-    if raw is None:
-        detail = "; ".join(f"{m}: {e}" for m, e in errors)
-        notice = f"LLM unavailable for '{item.title[:60]}': {detail}"
+    def build(chunk: str) -> str:
+        return _build_prompt(dataclasses.replace(item, content=chunk), language)
 
-    if raw is None:
+    result, priority, timing, failed_models, errors = _summarize_text(
+        item, config, assigned_model, language, _split_content(item.content), build,
+    )
+    if result is None:
+        detail = "; ".join(f"{m}: {e}" for m, e in errors)
         return SummarizedItem(
             source=item.source, kind=item.kind, title=item.title, url=item.url,
             summary=f"[LLM error — {detail}]",
             author=item.author, timestamp=item.timestamp, priority=item.priority,
             project=item.project,
-        ), notice, None, failed_models
+        ), f"LLM unavailable for '{item.title[:60]}': {detail}", None, failed_models
 
-    result, priority = _parse_response(raw, item)
     if result is _SKIP:
-        return None, notice, timing, failed_models
+        return None, None, timing, failed_models
 
     return SummarizedItem(
         source=item.source, kind=item.kind, title=item.title, url=item.url,
         summary=result,
         author=item.author, timestamp=item.timestamp, priority=priority,
         project=item.project,
-    ), notice, timing, failed_models
+    ), None, timing, failed_models
 
 
 def summarize_items(

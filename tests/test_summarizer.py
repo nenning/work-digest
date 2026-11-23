@@ -290,22 +290,14 @@ def test_invalid_outlook_priority_falls_back():
 # ---------------------------------------------------------------------------
 
 def test_llm_error_caught_and_continues():
-    import threading
     items = [
         _make_item(source="jira", content="A" * 200),
         _make_item(source="teams", content="B" * 200),
     ]
     config = _openai_config()
 
-    call_lock = threading.Lock()
-    call_count = 0
-
     def flaky_create(**kwargs):
-        nonlocal call_count
-        with call_lock:
-            call_count += 1
-            count = call_count
-        if count == 1:
+        if "AAAA" in kwargs["messages"][0]["content"]:
             raise RuntimeError("rate limit hit")
         m = MagicMock()
         m.choices[0].message.content = json.dumps({"summary": "Second item summary."})
@@ -590,12 +582,8 @@ def test_llm_error_summary_preserves_project():
     item_ok = _make_item(source="teams", content="B" * 200)
     config = LLMConfig(provider="openai", api_key="sk-test", models=["gpt-4o"], llm_workers=1)
 
-    call_count = 0
-
     def flaky_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
+        if "AAAA" in kwargs["messages"][0]["content"]:
             raise RuntimeError("boom")
         m = MagicMock()
         m.choices[0].message.content = json.dumps({"summary": "ok"})
@@ -667,3 +655,180 @@ def test_format_field_change_escapes_other_fields_when_rebuilt():
     ])
     result = _format_field_change(item)
     assert "Anna &amp; Bob" in result.summary
+
+
+# ---------------------------------------------------------------------------
+# Chunked summarization of oversized content
+# ---------------------------------------------------------------------------
+
+def test_split_content_short_text_is_one_untouched_chunk():
+    from digest.summarizer import _split_content
+    assert _split_content("short text ") == ["short text "]
+
+
+def test_split_content_chunks_bounded_balanced_and_lossless():
+    from digest.summarizer import _CONTENT_MAX_CHARS, _split_content
+    text = "\n\n".join(f"Paragraph {i}: " + "word " * 120 for i in range(25))
+    chunks = _split_content(text)
+    assert len(chunks) > 1
+    assert all(len(c) <= _CONTENT_MAX_CHARS for c in chunks)
+    assert min(len(c) for c in chunks) > _CONTENT_MAX_CHARS // 4
+    assert " ".join(" ".join(chunks).split()) == " ".join(text.split())
+
+
+def test_split_content_without_separators_hard_cuts():
+    from digest.summarizer import _CONTENT_MAX_CHARS, _split_content
+    chunks = _split_content("x" * (_CONTENT_MAX_CHARS * 2 + 10))
+    assert all(len(c) <= _CONTENT_MAX_CHARS for c in chunks)
+    assert sum(len(c) for c in chunks) == _CONTENT_MAX_CHARS * 2 + 10
+
+
+def _openai_client(replies):
+    """Mock OpenAI client whose successive calls return (or raise) the given replies; records prompts."""
+    prompts = []
+    it = iter(replies)
+
+    def create(**kwargs):
+        prompts.append(kwargs["messages"][0]["content"])
+        r = next(it)
+        if isinstance(r, Exception):
+            raise r
+        m = MagicMock()
+        m.choices[0].message.content = json.dumps(r)
+        return m
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = create
+    return client, prompts
+
+
+def test_large_content_is_split_summarized_per_chunk_and_merged():
+    content = "\n\n".join(f"Section {i}: " + "detail " * 150 for i in range(12))
+    item = _make_item(source="confluence", kind="page_update", content=content)
+    client, prompts = _openai_client([{"summary": "part A"}, {"summary": "part B"}, {"summary": "part C"}] + [{"summary": "merged"}] * 5)
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], _openai_config())
+    n_chunks = len(prompts) - 1
+    assert n_chunks >= 2
+    assert "Partial summaries" in prompts[-1] and "1. " in prompts[-1]
+    assert results[0].summary == "merged"
+    assert all("Partial summaries" not in p for p in prompts[:-1])
+    assert "Section 11" in "".join(prompts[:-1])
+
+
+def test_large_content_failed_merge_falls_back_to_joined_partials():
+    content = "word " * 2000
+    item = _make_item(source="teams", kind="message", content=content)
+    config = LLMConfig(provider="openai", api_key="sk", models=["gpt-4o"], llm_workers=1)
+    n = len(__import__("digest.summarizer", fromlist=["_split_content"])._split_content(content))
+    client, _ = _openai_client([{"summary": f"p{i}"} for i in range(n)] + [RuntimeError("boom")])
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], config)
+    assert results[0].summary == " ".join(f"p{i}" for i in range(n))
+
+
+def test_large_content_chunk_failing_on_all_models_gives_llm_error():
+    item = _make_item(source="teams", kind="message", content="word " * 2000)
+    config = LLMConfig(provider="openai", api_key="sk", models=["gpt-4o"], llm_workers=1)
+    client, _ = _openai_client([{"summary": "p0"}] + [RuntimeError("boom")] * 3)
+    notices: list = []
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        with pytest.raises(Exception):
+            summarize_items([item], config, notices)
+    assert any("LLM unavailable" in n for n in notices)
+
+
+def test_large_outlook_content_takes_most_urgent_chunk_priority():
+    item = _make_item(source="outlook", kind="email", content="word " * 2000, priority="info")
+    client, _ = _openai_client(
+        [{"summary": "a", "priority": "fyi"}, {"summary": "b", "priority": "action_needed"}] + [{"summary": "m"}] * 5
+    )
+    config = LLMConfig(provider="openai", api_key="sk", models=["gpt-4o"], llm_workers=1)
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], config)
+    assert results[0].priority == "action_needed"
+
+
+def test_large_confluence_content_all_chunks_skipped_skips_item():
+    item = _make_item(source="confluence", kind="page_update", content="word " * 2000)
+    client, _ = _openai_client([{"summary": None}] * 5)
+    config = LLMConfig(provider="openai", api_key="sk", models=["gpt-4o"], llm_workers=1)
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], config)
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Retry with backoff
+# ---------------------------------------------------------------------------
+
+def test_failing_call_is_retried_with_backoff_then_succeeds(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("digest.summarizer._backoff_sleep", sleeps.append)
+    item = _make_item(source="teams", content="B" * 200)
+    client, prompts = _openai_client([RuntimeError("timeout"), RuntimeError("timeout"), {"summary": "ok"}])
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], _openai_config())
+    assert results[0].summary == "ok"
+    assert len(prompts) == 3
+    assert sleeps == [2.0, 6.0]
+
+
+def test_retry_gives_up_after_three_attempts(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("digest.summarizer._backoff_sleep", sleeps.append)
+    item = _make_item(source="teams", content="B" * 200)
+    client, prompts = _openai_client([RuntimeError("timeout")] * 10)
+    notices: list = []
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        with pytest.raises(Exception):
+            summarize_items([item], _openai_config(), notices)
+    assert len(prompts) == 3
+    assert len(sleeps) == 2
+    assert any("LLM unavailable" in n for n in notices)
+
+
+def test_each_attempt_round_tries_all_models():
+    item = _make_item(source="teams", content="B" * 200)
+    config = LLMConfig(provider="openai", api_key="sk", models=["m1", "m2"], llm_workers=1)
+    models_used = []
+
+    def create(**kwargs):
+        models_used.append(kwargs["model"])
+        if len(models_used) < 4:
+            raise RuntimeError("down")
+        m = MagicMock()
+        m.choices[0].message.content = json.dumps({"summary": "ok"})
+        return m
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = create
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], config)
+    assert models_used == ["m1", "m2", "m1", "m2"]
+    assert results[0].summary == "ok"
+
+
+def test_permanent_client_error_is_not_retried(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("digest.summarizer._backoff_sleep", sleeps.append)
+    item = _make_item(source="teams", content="B" * 200)
+
+    class AuthError(Exception):
+        status_code = 401
+
+    client, prompts = _openai_client([AuthError("bad key")] * 5)
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        with pytest.raises(Exception):
+            summarize_items([item], _openai_config(), [])
+    assert len(prompts) == 1
+    assert sleeps == []

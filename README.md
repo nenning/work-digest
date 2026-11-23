@@ -45,7 +45,7 @@ pip install -r requirements.txt
 | `m365.client_id` | No | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` | Custom Azure AD app ID; required if your tenant blocks the Azure CLI public client (AADSTS65002) |
 | `llm.provider` | Yes | `openai` | LLM provider: `openai`, `anthropic`, or `azure_openai` |
 | `llm.api_key` | Yes | `sk-...` (OpenAI) or `sk-ant-...` (Anthropic) | API key for LLM provider |
-| `llm.summary_models` | Yes | `gpt-4o-mini` | Model(s) for per-item summaries, comma-separated or YAML list (e.g., `"gpt-4o, gpt-4o-mini"`). Items are distributed round-robin; all models run in parallel and the others are the failover for a failing call. |
+| `llm.summary_models` | Yes | `gpt-4o-mini` | Model(s) for per-item summaries, comma-separated or YAML list (e.g., `"gpt-4o, gpt-4o-mini"`). Items are distributed round-robin; all models run in parallel and the others are the failover for a failing call. A call that fails on every model is retried up to 3 rounds in total (2 s / 6 s backoff; auth/bad-request errors are not retried). Item content over 4000 chars is split, summarized per chunk and merged by a final LLM call. |
 | `llm.endpoint` | No | `https://...` | Optional custom endpoint (overrides provider default) |
 | `llm.llm_workers` | No | `4` | Parallel LLM calls during summarization (default: 4) |
 | `llm.heavy_models` | No | `claude-sonnet-5-5` | Model(s) for heavy calls: everything of `--mgmt-summary`, spec monitor change request / delta spec / rewrites. Empty = `llm.summary_models` |
