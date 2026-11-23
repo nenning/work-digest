@@ -293,7 +293,7 @@ Reports what changed on a Confluence page and all pages below it in the previous
 - `python main.py --page-watch-apply [KW45-2026 | page id or URL]` — Acts on the ticked boxes: sets the `frozen` label, creates one Jira ticket per page and week (delta specification), writes `<data_dir>/page_watch/CR-2026-KW45.md` collecting all pages with a ticked `create CR` box. Without an argument it processes every report page of the last 8 weeks that has ticked boxes; done boxes are rewritten as done lines, so a second run never creates duplicates. `--dry-run` shows what would be done
 - Needs write access for the Atlassian token (page labels, pages and attachments, issues; with `auth_type: scoped` the corresponding write scopes)
 - Suggested schedule: `--page-watch --publish-page` on Monday morning, `--page-watch-apply` daily or after the review
-- Helper scripts in the repo root: `page-watch.bat`, `dryrun-page-watch.bat`, `page-watch-apply.bat`, `dryrun-page-watch-apply.bat`; extra arguments are passed through
+- Helper scripts in the repo root: `page-watch.bat` (always adds `--publish-page`), `dryrun-page-watch.bat`, `page-watch-apply.bat`, `dryrun-page-watch-apply.bat`; extra arguments are passed through
 
 ### Spec Source Monitor Mode
 

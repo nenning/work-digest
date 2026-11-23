@@ -1,1 +1,1 @@
-python "%~dp0run_digest.py" --page-watch %*
+python "%~dp0run_digest.py" --page-watch --publish-page %*

@@ -114,7 +114,7 @@ not configured), 2 some actions failed. The Atlassian token needs write access (
 - Exit 0 clean; 1 fatal or delivery failed; 2 delivered with problems (see the error table).
 - Run statistics (`digest/usage.py`) are printed like for the other spec-monitor modes; LLM purposes
   `source_summary` (page summaries) and `watch_synthesis`.
-- Launchers in the repo root: `page-watch.bat` (standard run), `dryrun-page-watch.bat`.
+- Launchers in the repo root: `page-watch.bat` (standard run, always with `--publish-page`), `dryrun-page-watch.bat`.
 
 ## Configuration (`page_watch` block, independent of `spec_monitor`)
 
