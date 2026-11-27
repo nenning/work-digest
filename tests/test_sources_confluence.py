@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from digest.config import AtlassianConfig, ProjectConfig, ProjectConfluenceConfig, ProjectJiraConfig
 from digest import problems
-from digest.page_exclude import PageExclusion
+from digest.page_exclude import EXCLUDED_SCOPE, PageExclusion
 from digest.sources import confluence as confluence_src
 from digest.sources.confluence import fetch, _validate_space_keys, _compute_diff, _storage_to_text
 
@@ -418,7 +418,8 @@ def test_page_update_on_excluded_page_skipped_and_reported(mocker):
     items = confluence_src._fetch_page_updates(_excluded_config(), "Basic xxx", "2026-04-09 07:00", SINCE, {})
     assert [i.title for i in items] == ["Kept"]
     assert [c.args[2] for c in diff.call_args_list] == ["1"]
-    messages, lossy = problems.take("confluence")
+    assert problems.take("confluence") == ([], False)
+    messages, lossy = problems.take(EXCLUDED_SCOPE)
     assert len(messages) == 1 and "1" in messages[0] and "excluded" in messages[0] and not lossy
 
 

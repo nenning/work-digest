@@ -38,6 +38,7 @@ from digest.email_sender import (
     send_mgmt_summary_via_smtp, send_mgmt_summary_via_com,
 )
 from digest.models import MgmtSection, SourceItem, SummarizedItem
+from digest.page_exclude import EXCLUDED_SCOPE
 from digest.sources import confluence, jira, outlook, teams
 from digest.sources.mgmt_jira import (
     build_ticket_queries,
@@ -63,6 +64,11 @@ def _print_notices(notices: List[str]) -> None:
     print(f"  {len(notices)} problem(s) during this run:")
     for n in notices:
         print(f"    - {n}")
+
+
+def _print_info(lines: List[str]) -> None:
+    for line in lines:
+        print(f"  Info: {line}")
 
 
 def parse_since(s: str) -> datetime:
@@ -488,6 +494,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
 
     sections: List[MgmtSection] = []
     notices: List[str] = []
+    excluded_info: List[str] = []
     problems.clear()
 
     for project in mgmt_projects:
@@ -538,6 +545,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             notices.append(msg)
             confluence_items = []
         notices.extend(f"{project.name}: {m}" for m in problems.take("mgmt-confluence")[0])
+        excluded_info.extend(f"{project.name}: {m}" for m in problems.take(EXCLUDED_SCOPE)[0])
 
         # Reuse the personal digest's per-item LLM summarization so each page (including
         # brand-new ones, diffed against an empty baseline) gets the same 1-2 sentence
@@ -579,12 +587,14 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
     if not sections:
         all_notices = notices + anonymizer.take_notices()
         _print_notices(all_notices)
+        _print_info(excluded_info)
         if notices:
             raise RuntimeError("Nothing found and errors occurred:\n  - " + "\n  - ".join(all_notices))
         print("Nothing found for the given time range.")
         return
 
     notices.extend(anonymizer.take_notices())
+    notices.extend(excluded_info)
 
     # --- Deliver: one email with one section per project that had content ---
     recipient = config.mgmt_summary.recipient or config.email.recipient
@@ -721,8 +731,10 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
                 fetched_sources.append(src)
 
     t_fetch_end = time.monotonic()
+    excluded_info = problems.take(EXCLUDED_SCOPE)[0]
 
     if not all_items:
+        _print_info(excluded_info)
         if notices:
             # Nothing to mail, but silently exiting 0 would hide that the run was broken.
             _print_notices(notices)
@@ -742,6 +754,7 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
     anonymize_notices = anonymizer.take_notices()
     if summarized:
         notices.extend(anonymize_notices)
+        notices.extend(excluded_info)
     t_sum_end = time.monotonic()
 
     # --- Deliver ---
@@ -811,6 +824,7 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
             raise RuntimeError("Nothing could be reported and errors occurred:\n  - "
                                + "\n  - ".join(notices + anonymize_notices))
         _print_notices(anonymize_notices)
+        _print_info(excluded_info)
         print("Nothing to report after summarizing (all changes were cosmetic).")
         return
 

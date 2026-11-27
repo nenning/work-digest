@@ -872,3 +872,95 @@ def test_placeholder_problem_is_reported_again_after_a_discarded_retry_attempt(t
     _run_personal(tmp_path, monkeypatch, summarize, send)
     assert len(calls) == 2
     assert any("PERSON_009" in n for n in send.call_args.kwargs["notices"])
+
+
+# ---------------------------------------------------------------------------
+# exclude_pages counts are informational
+# ---------------------------------------------------------------------------
+
+def _excluding_fetch(items):
+    def fetch(*a):
+        from digest.page_exclude import report_excluded
+        report_excluded(3)
+        return items
+    return fetch
+
+
+def test_only_excluded_pages_is_nothing_new_not_an_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--source", "confluence"])
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.confluence.fetch", side_effect=_excluding_fetch([])),
+    ):
+        from digest.main import main
+        main()
+    out = capsys.readouterr().out
+    assert "Nothing new" in out and "3 page(s) excluded by exclude_pages" in out
+
+
+def test_all_cosmetic_with_excluded_pages_exits_cleanly(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--source", "confluence"])
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.confluence.fetch", side_effect=_excluding_fetch([_item()])),
+        patch("digest.main.summarize_items", return_value=[]),
+        patch("digest.main.send_via_smtp", return_value=False),
+    ):
+        from digest.main import main
+        main()
+    out = capsys.readouterr().out
+    assert "Nothing to report" in out and "3 page(s) excluded by exclude_pages" in out
+
+
+def test_excluded_count_appears_in_mailed_notices(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--source", "confluence"])
+    send = MagicMock(return_value=True)
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.save_state") as save,
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.confluence.fetch", side_effect=_excluding_fetch([_item()])),
+        patch("digest.main.summarize_items", return_value=[_summarized()]),
+        patch("digest.main.send_via_smtp", send),
+    ):
+        from digest.main import main
+        main()
+    assert "3 page(s) excluded by exclude_pages" in send.call_args.kwargs["notices"]
+    assert "confluence" in save.call_args.args[1]
+
+
+def _mgmt_excluding(tmp_path, monkeypatch, tickets):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    project = ProjectConfig(name="P1", jira=ProjectJiraConfig(project="PROJ"), mgmt_summary=ProjectMgmtSummaryConfig())
+    send = MagicMock(return_value=True)
+    with (
+        patch("digest.main.load_config", return_value=_make_mgmt_config(tmp_path, [project])),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=(tickets, {"a1"})),
+        patch("digest.main.fetch_team_pages", side_effect=_excluding_fetch([])),
+        patch("digest.main.synthesize_mgmt_summary", return_value="ok"),
+        patch("digest.main.send_mgmt_summary_via_smtp", send),
+    ):
+        from digest.main import main
+        main()
+    return send
+
+
+def test_mgmt_only_excluded_pages_is_nothing_found_not_an_error(tmp_path, monkeypatch, capsys):
+    send = _mgmt_excluding(tmp_path, monkeypatch, [])
+    send.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Nothing found" in out and "P1: 3 page(s) excluded by exclude_pages" in out
+
+
+def test_mgmt_excluded_count_appears_in_mailed_notices(tmp_path, monkeypatch):
+    send = _mgmt_excluding(tmp_path, monkeypatch, [_make_ticket()])
+    assert send.call_args.kwargs["notices"] == ["P1: 3 page(s) excluded by exclude_pages"]

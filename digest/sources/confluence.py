@@ -10,6 +10,7 @@ from urllib.parse import urlparse, urlunparse
 from digest import problems
 from digest.config import AtlassianConfig
 from digest.models import SourceItem
+from digest.page_exclude import report_excluded
 
 log = logging.getLogger(__name__)
 
@@ -179,7 +180,7 @@ def _fetch_page_updates(
     exclusion = config.exclude_pages
     kept = [r for r in results if not exclusion.is_excluded(r["id"], r.get("title", ""), r.get("ancestors") or [])]
     if len(kept) < len(results):
-        problems.report("confluence", f"{len(results) - len(kept)} page(s) excluded by exclude_pages", lossy=False)
+        report_excluded(len(results) - len(kept))
     results = kept
 
     if not results:

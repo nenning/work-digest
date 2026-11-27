@@ -12,7 +12,7 @@ from digest.config import (
 import re
 
 from digest import problems
-from digest.page_exclude import PageExclusion
+from digest.page_exclude import EXCLUDED_SCOPE, PageExclusion
 from digest.sources.mgmt_confluence import fetch_team_pages
 
 
@@ -482,5 +482,6 @@ def test_team_pages_excluded_by_title_pattern():
 
     assert [i.title for i in items] == ["Page One"]
     assert seen_expand == ["version,ancestors"]
-    messages, lossy = problems.take("mgmt-confluence")
+    assert problems.take("mgmt-confluence") == ([], False)
+    messages, lossy = problems.take(EXCLUDED_SCOPE)
     assert len(messages) == 1 and "2 page(s)" in messages[0] and not lossy

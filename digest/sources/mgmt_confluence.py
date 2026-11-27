@@ -11,6 +11,7 @@ from typing import List, Optional, Set, Tuple
 from digest import problems
 from digest.config import AtlassianConfig, MgmtSummaryConfig
 from digest.models import SourceItem
+from digest.page_exclude import report_excluded
 from digest.sources.confluence import _compute_diff, _storage_to_text
 
 log = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ def fetch_team_pages(
     exclusion = config.exclude_pages
     kept = [r for r in results if not exclusion.is_excluded(r["id"], r.get("title", ""), r.get("ancestors") or [])]
     if len(kept) < len(results):
-        problems.report("mgmt-confluence", f"{len(results) - len(kept)} page(s) excluded by exclude_pages", lossy=False)
+        report_excluded(len(results) - len(kept))
     results = kept
     if not results:
         return []

@@ -2,6 +2,10 @@ import re
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
+from digest import problems
+
+EXCLUDED_SCOPE = "exclude_pages"
+
 
 @dataclass(frozen=True)
 class PageExclusion:
@@ -34,3 +38,8 @@ def load_exclusion(raw: Optional[dict]) -> PageExclusion:
         page_ids=frozenset(str(i).strip() for i in (raw.get("page_ids") or []) if str(i).strip()),
         title_patterns=tuple(patterns),
     )
+
+
+def report_excluded(count: int) -> None:
+    """Record an informational count of excluded pages; main.py shows it without treating it as an error."""
+    problems.report(EXCLUDED_SCOPE, f"{count} page(s) excluded by exclude_pages", lossy=False)
