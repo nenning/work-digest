@@ -12,7 +12,7 @@ from typing import List, Optional
 import anthropic
 import openai
 
-from digest import summarizer, usage
+from digest import anonymizer, summarizer, usage
 from digest.config import VisionLLMConfig
 from digest.spec_monitor.cache import SpecCache, hash_key
 
@@ -130,6 +130,7 @@ def _is_transient(exc: Exception) -> bool:
 
 def _call_anthropic(vision: VisionLLMConfig, prompt: str, old_b64: str, new_b64: str,
                     old_type: str, new_type: str) -> str:
+    prompt = anonymizer.outgoing(prompt)
     kwargs: dict = {"api_key": vision.api_key, "timeout": vision.timeout, "max_retries": 0}
     if vision.endpoint:
         kwargs["base_url"] = vision.endpoint
@@ -151,11 +152,12 @@ def _call_anthropic(vision: VisionLLMConfig, prompt: str, old_b64: str, new_b64:
     text = next((b.text for b in response.content or [] if isinstance(getattr(b, "text", None), str)), None)
     if text is None:
         raise VisionError(f"vision model returned no text (stop_reason={getattr(response, 'stop_reason', None)})")
-    return text
+    return anonymizer.incoming(text)
 
 
 def _call_openai(vision: VisionLLMConfig, prompt: str, old_b64: str, new_b64: str,
                  old_type: str, new_type: str) -> str:
+    prompt = anonymizer.outgoing(prompt)
     if vision.provider == "azure_openai":
         client = openai.AzureOpenAI(
             api_key=vision.api_key, azure_endpoint=vision.endpoint, api_version="2024-02-01",
@@ -182,7 +184,7 @@ def _call_openai(vision: VisionLLMConfig, prompt: str, old_b64: str, new_b64: st
     usage.note_tokens(getattr(response.usage, "prompt_tokens", None), getattr(response.usage, "completion_tokens", None))
     if not response.choices:
         raise VisionError("empty response from vision model")
-    return response.choices[0].message.content or ""
+    return anonymizer.incoming(response.choices[0].message.content or "")
 
 
 def _parse(raw: str) -> VisionDiff:

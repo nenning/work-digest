@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import dataclasses
 import json
 import logging
@@ -14,7 +15,7 @@ import anthropic
 import openai
 from markupsafe import Markup
 
-from digest import problems, usage
+from digest import anonymizer, problems, usage
 from digest.config import LLMConfig
 from digest.models import SourceItem, SummarizedItem
 
@@ -180,7 +181,7 @@ def _call_llm_timed(prompt: str, config: LLMConfig, model: str) -> tuple[str, fl
         finally:
             elapsed[0] = time.monotonic() - t0
 
-    t = threading.Thread(target=_target, daemon=True)
+    t = threading.Thread(target=contextvars.copy_context().run, args=(_target,), daemon=True)
     t.start()
     t.join(timeout=config.llm_timeout)
     if t.is_alive():
@@ -191,6 +192,7 @@ def _call_llm_timed(prompt: str, config: LLMConfig, model: str) -> tuple[str, fl
 
 
 def _call_openai(prompt: str, config: LLMConfig, model: str, timeout: float, json_mode: bool = True) -> str:
+    prompt = anonymizer.outgoing(prompt)
     # timeout: without it the SDK defaults to no timeout at all, so a hung endpoint blocks
     # forever. Callers pass a value sized for what they're waiting on -- config.llm_timeout
     # (tuned for a short per-item summary) would be too tight for synthesize_mgmt_summary()'s
@@ -222,10 +224,11 @@ def _call_openai(prompt: str, config: LLMConfig, model: str, timeout: float, jso
     usage.note_tokens(getattr(response.usage, "prompt_tokens", None), getattr(response.usage, "completion_tokens", None))
     if not response.choices:
         raise ValueError("LLM returned empty choices list")
-    return response.choices[0].message.content
+    return anonymizer.incoming(response.choices[0].message.content)
 
 
 def _call_anthropic(prompt: str, config: LLMConfig, model: str, timeout: float, max_tokens: int = 500) -> str:
+    prompt = anonymizer.outgoing(prompt)
     kwargs: dict = {"api_key": config.api_key, "timeout": timeout, "max_retries": 0}
     if config.endpoint:
         kwargs["base_url"] = config.endpoint
@@ -239,7 +242,7 @@ def _call_anthropic(prompt: str, config: LLMConfig, model: str, timeout: float, 
     usage.note_tokens(getattr(response.usage, "input_tokens", None), getattr(response.usage, "output_tokens", None))
     if not response.content:
         raise ValueError("Anthropic returned empty content list")
-    return response.content[0].text
+    return anonymizer.incoming(response.content[0].text)
 
 
 def _models_to_try(assigned: str, config: LLMConfig) -> List[str]:
@@ -527,26 +530,27 @@ def _summarize_new_ticket(
     language: str,
 ) -> tuple[SummarizedItem, str | None, tuple[str, float] | None, list[str]]:
     """Returns (SummarizedItem, notice | None, (model, elapsed) | None, failed_models). Never raises."""
-    desc = item.metadata.get("description", "").strip()
-    desc_summary = None
-    notice = None
-    timing: tuple[str, float] | None = None
-    failed_models: list[str] = []
-    if desc:
-        def build(chunk: str) -> str:
-            return _build_description_prompt(
-                dataclasses.replace(item, metadata={**item.metadata, "description": chunk}), language,
-            )
+    with anonymizer.skipped(item.source in ("teams", "outlook")):
+        desc = item.metadata.get("description", "").strip()
+        desc_summary = None
+        notice = None
+        timing: tuple[str, float] | None = None
+        failed_models: list[str] = []
+        if desc:
+            def build(chunk: str) -> str:
+                return _build_description_prompt(
+                    dataclasses.replace(item, metadata={**item.metadata, "description": chunk}), language,
+                )
 
-        result, _, timing, failed_models, errors = _summarize_text(
-            item, config, assigned_model, language, _split_content(desc), build,
-        )
-        if result is None:
-            detail = "; ".join(f"{m}: {e}" for m, e in errors)
-            notice = f"LLM unavailable for '{item.title[:60]}': {detail}"
-        elif result is not _SKIP:
-            desc_summary = result
-    return _format_new_ticket(item, desc_summary, language), notice, timing, failed_models
+            result, _, timing, failed_models, errors = _summarize_text(
+                item, config, assigned_model, language, _split_content(desc), build,
+            )
+            if result is None:
+                detail = "; ".join(f"{m}: {e}" for m, e in errors)
+                notice = f"LLM unavailable for '{item.title[:60]}': {detail}"
+            elif result is not _SKIP:
+                desc_summary = result
+        return _format_new_ticket(item, desc_summary, language), notice, timing, failed_models
 
 
 def _summarize_one_item(
@@ -559,30 +563,31 @@ def _summarize_one_item(
     Returns None as first element for Confluence cosmetic-only skips. Never raises.
     Content over _CONTENT_MAX_CHARS is split, summarized per chunk and merged.
     """
-    def build(chunk: str) -> str:
-        return _build_prompt(dataclasses.replace(item, content=chunk), language)
+    with anonymizer.skipped(item.source in ("teams", "outlook")):
+        def build(chunk: str) -> str:
+            return _build_prompt(dataclasses.replace(item, content=chunk), language)
 
-    result, priority, timing, failed_models, errors = _summarize_text(
-        item, config, assigned_model, language, _split_content(item.content), build,
-    )
-    if result is None:
-        detail = "; ".join(f"{m}: {e}" for m, e in errors)
+        result, priority, timing, failed_models, errors = _summarize_text(
+            item, config, assigned_model, language, _split_content(item.content), build,
+        )
+        if result is None:
+            detail = "; ".join(f"{m}: {e}" for m, e in errors)
+            return SummarizedItem(
+                source=item.source, kind=item.kind, title=item.title, url=item.url,
+                summary=f"[LLM error — {detail}]",
+                author=item.author, timestamp=item.timestamp, priority=item.priority,
+                project=item.project,
+            ), f"LLM unavailable for '{item.title[:60]}': {detail}", None, failed_models
+
+        if result is _SKIP:
+            return None, None, timing, failed_models
+
         return SummarizedItem(
             source=item.source, kind=item.kind, title=item.title, url=item.url,
-            summary=f"[LLM error — {detail}]",
-            author=item.author, timestamp=item.timestamp, priority=item.priority,
+            summary=result,
+            author=item.author, timestamp=item.timestamp, priority=priority,
             project=item.project,
-        ), f"LLM unavailable for '{item.title[:60]}': {detail}", None, failed_models
-
-    if result is _SKIP:
-        return None, None, timing, failed_models
-
-    return SummarizedItem(
-        source=item.source, kind=item.kind, title=item.title, url=item.url,
-        summary=result,
-        author=item.author, timestamp=item.timestamp, priority=priority,
-        project=item.project,
-    ), None, timing, failed_models
+        ), None, timing, failed_models
 
 
 def summarize_items(

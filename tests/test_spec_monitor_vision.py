@@ -415,3 +415,30 @@ def test_high_confidence_no_difference_has_no_low_confidence_warning(mocks):
     mon, _ = make_monitor({("arch.png", 1): b"P1", ("arch.png", 2): b"P2"}, cfg())
     res = resolve(mon)
     assert not any("low confidence" in w for w in res.warnings)
+
+
+@pytest.fixture
+def gate():
+    from digest import anonymizer
+    anonymizer.configure(anonymizer.Anonymizer(["Hans Muster"]))
+    yield
+    anonymizer.configure(None)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_vision_text_prompt_anonymized_and_reply_restored(mocker, gate, provider):
+    reply = json.dumps({"summary": "PERSON_001 changed it", "changes": ["EMAIL_001 added"], "confidence": "high"})
+    if provider == "anthropic":
+        _, client = anthropic_client(mocker, reply)
+        create = client.messages.create
+    else:
+        _, client = openai_client(mocker, reply)
+        create = client.chat.completions.create
+    res = compare_images(OLD, NEW, diagram_name="Hans Muster arch", context="mail hans@x.ch", vision=cfg(provider),
+                         language="en")
+    content = create.call_args.kwargs["messages"][0]["content"]
+    texts = " ".join(b["text"] for b in content if b["type"] == "text")
+    assert "Hans Muster" not in texts and "hans@x.ch" not in texts and "PERSON_001" in texts
+    images = [b for b in content if b["type"] != "text"]
+    assert len(images) == 2
+    assert res.summary == "Hans Muster changed it" and res.changes == ["hans@x.ch added"]

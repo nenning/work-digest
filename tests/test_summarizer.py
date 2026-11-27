@@ -832,3 +832,103 @@ def test_permanent_client_error_is_not_retried(monkeypatch):
             summarize_items([item], _openai_config(), [])
     assert len(prompts) == 1
     assert sleeps == []
+
+
+# ---------------------------------------------------------------------------
+# Anonymization gate at every LLM exit
+# ---------------------------------------------------------------------------
+
+PII_PROMPT = "Hans Muster, hans@x.ch, +41 79 123 45 67"
+PII_REPLY = "PERSON_001 / EMAIL_001 / PHONE_001"
+PII_RESTORED = "Hans Muster / hans@x.ch / +41 79 123 45 67"
+
+
+@pytest.fixture
+def gate():
+    from digest import anonymizer
+    anonymizer.configure(anonymizer.Anonymizer(["Hans Muster"]))
+    yield
+    anonymizer.configure(None)
+
+
+def _oa_client(reply):
+    client = MagicMock()
+    client.chat.completions.create.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=reply))])
+    return client
+
+
+def _an_client(reply):
+    client = MagicMock()
+    client.messages.create.return_value = MagicMock(content=[MagicMock(text=reply)])
+    return client
+
+
+def _assert_no_pii(text):
+    for secret in ("Hans Muster", "hans@x.ch", "123 45 67"):
+        assert secret not in text
+
+
+def test_prompt_sent_without_name_email_phone_and_reply_restored(gate):
+    from digest.summarizer import _call_openai
+    client = _oa_client(PII_REPLY)
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        out = _call_openai(PII_PROMPT, _openai_config(), "gpt-4o", 5)
+    sent = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    _assert_no_pii(sent)
+    assert out == PII_RESTORED
+
+
+def test_anthropic_path_same(gate):
+    from digest.summarizer import _call_anthropic
+    client = _an_client(PII_REPLY)
+    with patch("digest.summarizer.anthropic") as mock_anthropic:
+        mock_anthropic.Anthropic.return_value = client
+        out = _call_anthropic(PII_PROMPT, _anthropic_config(), "claude", 5)
+    _assert_no_pii(client.messages.create.call_args.kwargs["messages"][0]["content"])
+    assert out == PII_RESTORED
+
+
+def test_none_content_reply_passes_through(gate):
+    from digest.summarizer import _call_openai
+    client = _oa_client(None)
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        assert _call_openai(PII_PROMPT, _openai_config(), "gpt-4o", 5) is None
+
+
+def test_works_through_call_llm_timed_thread(gate):
+    from digest import anonymizer
+    from digest.summarizer import _call_llm_timed
+    client = _oa_client(PII_REPLY)
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        out, _ = _call_llm_timed(PII_PROMPT, _openai_config(), "gpt-4o")
+        _assert_no_pii(client.chat.completions.create.call_args.kwargs["messages"][0]["content"])
+        assert out == PII_RESTORED
+        with anonymizer.skipped(True):
+            out, _ = _call_llm_timed(PII_PROMPT, _openai_config(), "gpt-4o")
+    assert client.chat.completions.create.call_args.kwargs["messages"][0]["content"] == PII_PROMPT
+    assert out == PII_REPLY
+
+
+@pytest.mark.parametrize("source,kind", [("teams", "message"), ("outlook", "email")])
+def test_teams_and_outlook_items_sent_unmodified(gate, source, kind):
+    item = _make_item(source=source, kind=kind, content=f"{PII_PROMPT} " + "A" * 200)
+    client = _oa_client(json.dumps({"summary": "PERSON_001 wrote", "priority": "info"}))
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], _openai_config())
+    sent = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert PII_PROMPT in sent
+    assert results[0].summary == "PERSON_001 wrote"
+
+
+def test_jira_item_through_summarize_items_anonymized_end_to_end(gate):
+    item = _make_item(source="jira", kind="comment", content=f"{PII_PROMPT} " + "A" * 200)
+    client = _oa_client(json.dumps({"summary": "PERSON_001 mailed EMAIL_001", "priority": "info"}))
+    with patch("digest.summarizer.openai") as mock_openai:
+        mock_openai.OpenAI.return_value = client
+        results = summarize_items([item], _openai_config())
+    _assert_no_pii(client.chat.completions.create.call_args.kwargs["messages"][0]["content"])
+    assert results[0].summary == "Hans Muster mailed hans@x.ch"
