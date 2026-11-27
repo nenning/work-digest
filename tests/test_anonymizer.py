@@ -241,3 +241,37 @@ def test_5000_names_50kb_prompt_fast():
     assert elapsed < 2.0, elapsed
     assert "PERSON_" in anon
     assert a.restore(anon) == text
+
+
+@pytest.mark.parametrize("phone", [
+    "079\xa0123\xa045\xa067", "+41\xa079 123 45 67", "+41\u202f79\u202f123\u202f45\u202f67",
+    "079\u2013123\u201345\u201367",
+])
+def test_phone_with_nbsp_or_en_dash_masked(phone):
+    a = Anonymizer()
+    anon = a.anonymize(f"Kontakt: {phone} now")
+    assert anon == "Kontakt: PHONE_001 now"
+    assert a.restore(anon) == f"Kontakt: {phone} now"
+
+
+def test_two_nbsp_phones_get_two_placeholders():
+    a = Anonymizer()
+    text = "079\xa0123\xa045\xa067\xa0044\xa0987\xa065\xa043"
+    anon = a.anonymize(text)
+    assert anon == "PHONE_001\xa0PHONE_002"
+    assert a.restore(anon) == text
+
+
+def test_date_next_to_nbsp_phone_kept():
+    a = Anonymizer()
+    text = "27.11.2026\xa0079\xa0123\xa045\xa067"
+    anon = a.anonymize(text)
+    assert anon == "27.11.2026\xa0PHONE_001"
+    assert a.restore(anon) == text
+
+
+def test_nbsp_phone_from_confluence_storage():
+    from digest.sources.confluence import _storage_to_text
+    a = Anonymizer()
+    anon = a.anonymize(_storage_to_text("<p>Kontakt: 079&nbsp;123&nbsp;45&nbsp;67</p>"))
+    assert "123" not in anon and "PHONE_001" in anon

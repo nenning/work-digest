@@ -12,7 +12,7 @@ from digest.config import AtlassianConfig, Config
 from digest.models import SourceItem
 
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-_PHONE_RE = re.compile(r"(?<![\w+])(?:\+|00)?\d[\d ()./\-]{7,}\d(?!\w)")
+_PHONE_RE = re.compile(r"(?<![\w+])(?:\+|00)?\d[\d \u00a0\u202f\u2013()./\-]{7,}\d(?!\w)")
 _DATE_RE = re.compile(
     r"(?<!\d)((?:19|20)\d\d-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
     r"|(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.(?:19|20)\d\d)(?!\d)"
