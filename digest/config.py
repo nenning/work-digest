@@ -559,16 +559,23 @@ VALID_DIRECTORY_FAILURE = ("fail", "continue")
 
 
 def _load_anonymize(raw: Optional[dict]) -> AnonymizeConfig:
-    if not raw:
+    if raw is None:
         return AnonymizeConfig()
-    names = raw.get("additional_names") or []
-    if isinstance(names, str):
-        names = [names]
+    if not isinstance(raw, dict):
+        raise ValueError(f"anonymize must be a mapping, got: {raw!r}")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"anonymize.enabled must be true or false, got: {enabled!r}")
+    names = raw.get("additional_names")
+    if names is None:
+        names = []
+    elif not isinstance(names, list):
+        raise ValueError(f"anonymize.additional_names must be a list, got: {names!r}")
     on_failure = raw.get("on_directory_failure", "fail")
     if on_failure not in VALID_DIRECTORY_FAILURE:
         raise ValueError(f"anonymize.on_directory_failure must be one of {list(VALID_DIRECTORY_FAILURE)}, got: {on_failure!r}")
     return AnonymizeConfig(
-        enabled=bool(raw.get("enabled", False)),
+        enabled=enabled,
         additional_names=[str(n).strip() for n in names if str(n).strip()],
         on_directory_failure=on_failure,
     )

@@ -45,3 +45,19 @@ def test_invalid_regex_names_the_config_key():
 def test_ids_are_coerced_to_str():
     assert load_exclusion({"page_ids": [123, "456"]}).page_ids == frozenset({"123", "456"})
     assert isinstance(load_exclusion({"title_patterns": ["a"]}).title_patterns[0], re.Pattern)
+
+
+@pytest.mark.parametrize("raw, key", [
+    ({"title_patterns": "Sandbox"}, "exclude_pages.title_patterns"),
+    ({"page_ids": "123456"}, "exclude_pages.page_ids"),
+    ({"page_ids": 123456}, "exclude_pages.page_ids"),
+    ([123], "exclude_pages"),
+    ("x", "exclude_pages"),
+])
+def test_scalar_or_non_dict_values_rejected(raw, key):
+    with pytest.raises(ValueError, match=key.replace(".", r"\.")):
+        load_exclusion(raw)
+
+
+def test_null_lists_tolerated():
+    assert not load_exclusion({"page_ids": None, "title_patterns": None})

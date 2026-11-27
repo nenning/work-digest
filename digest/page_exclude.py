@@ -25,17 +25,28 @@ class PageExclusion:
         return False
 
 
+def _list(raw: dict, key: str) -> list:
+    value = raw.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"exclude_pages.{key} must be a list, got: {value!r}")
+    return value
+
+
 def load_exclusion(raw: Optional[dict]) -> PageExclusion:
-    if not raw:
+    if raw is None:
         return PageExclusion()
+    if not isinstance(raw, dict):
+        raise ValueError(f"exclude_pages must be a mapping with page_ids and/or title_patterns, got: {raw!r}")
     patterns = []
-    for pattern in raw.get("title_patterns") or []:
+    for pattern in _list(raw, "title_patterns"):
         try:
             patterns.append(re.compile(str(pattern), re.IGNORECASE))
         except re.error as exc:
             raise ValueError(f"exclude_pages.title_patterns: invalid regex {pattern!r}: {exc}") from None
     return PageExclusion(
-        page_ids=frozenset(str(i).strip() for i in (raw.get("page_ids") or []) if str(i).strip()),
+        page_ids=frozenset(str(i).strip() for i in _list(raw, "page_ids") if str(i).strip()),
         title_patterns=tuple(patterns),
     )
 

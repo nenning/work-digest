@@ -817,3 +817,16 @@ def test_on_directory_failure_must_be_fail_or_continue(tmp_path):
 def test_for_project_keeps_exclude_pages(tmp_path):
     cfg = _load(tmp_path, "exclude_pages:\n  page_ids: [7]\n")
     assert cfg.atlassian.for_project(cfg.atlassian.projects[0]).exclude_pages.page_ids == {"7"}
+
+
+@pytest.mark.parametrize("yaml, key", [
+    ("anonymize:\n  enabled: \"false\"\n", "anonymize.enabled"),
+    ("anonymize:\n  enabled: 1\n", "anonymize.enabled"),
+    ("anonymize:\n  additional_names: Acme Corp\n", "anonymize.additional_names"),
+    ("anonymize: [1]\n", "anonymize"),
+    ("exclude_pages:\n  title_patterns: Sandbox\n", "exclude_pages.title_patterns"),
+    ("exclude_pages: [123]\n", "exclude_pages"),
+])
+def test_bad_exclude_and_anonymize_values_rejected(tmp_path, yaml, key):
+    with pytest.raises(ValueError, match=key.replace(".", r"\.")):
+        _load(tmp_path, yaml)
