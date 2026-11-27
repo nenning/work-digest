@@ -2,9 +2,10 @@
 
     parent_page_id: "41484320"      # «Coremodul» this page and all its descendants are watched
 
-Only the inline comment of `*page_id: <digits>` lines is touched; every other byte of the file (secrets,
-other comments, encoding, line endings) stays as it was. A hand-written comment keeps its text behind
-the «title» marker. Titles that cannot be fetched leave the line unchanged.
+Only the inline comment of `*page_id: <digits>` lines and of the items of a block-style `page_ids:` list
+is touched; every other byte of the file (secrets, other comments, encoding, line endings) stays as it was.
+A hand-written comment keeps its text behind the «title» marker. Titles that cannot be fetched leave the
+line unchanged.
 """
 import logging
 import os
@@ -16,6 +17,9 @@ from typing import Callable, Dict, List, Tuple
 log = logging.getLogger(__name__)
 
 _LINE = re.compile(r"^(?P<head>\s*\w*page_id:\s*)(?P<q>[\"']?)(?P<id>\d+)(?P=q)(?P<gap>[ \t]*)(?P<comment>#.*?)?(?P<eol>\r?\n)?$")
+_ITEM = re.compile(r"^(?P<head>\s*-\s*)(?P<q>[\"']?)(?P<id>\d+)(?P=q)(?P<gap>[ \t]*)(?P<comment>#.*?)?(?P<eol>\r?\n)?$")
+_BLOCK_START = re.compile(r"^\s*page_ids:\s*(#.*)?$")
+_SKIPPABLE = re.compile(r"^\s*(#.*)?$")
 _MARKER = re.compile(r"^«.*?»\s*")
 
 
@@ -33,10 +37,26 @@ def _new_comment(old_comment: str, title: str) -> str:
     return f"# «{title}»" + (f" {text}" if text else "")
 
 
+def _scan(text: str):
+    """Yields (line, match) per line; match is set for `*page_id:` lines and items of a block-style `page_ids:` list."""
+    in_block = False
+    for line in text.splitlines(keepends=True):
+        bare = line.rstrip("\r\n")
+        m = _LINE.match(line)
+        if not m and in_block:
+            m = _ITEM.match(line)
+        if m:
+            in_block = m.re is _ITEM
+        elif _BLOCK_START.match(bare):
+            in_block = True
+        elif not (in_block and _SKIPPABLE.match(bare)):
+            in_block = False
+        yield line, m
+
+
 def annotate_text(text: str, titles: Dict[str, str]) -> str:
     out = []
-    for line in text.splitlines(keepends=True):
-        m = _LINE.match(line)
+    for line, m in _scan(text):
         title = titles.get(m.group("id")) if m else None
         if not m or not title:
             out.append(line)
@@ -49,8 +69,7 @@ def annotate_text(text: str, titles: Dict[str, str]) -> str:
 
 def page_ids(text: str) -> List[str]:
     ids: List[str] = []
-    for line in text.splitlines():
-        m = _LINE.match(line)
+    for _, m in _scan(text):
         if m and m.group("id") not in ids:
             ids.append(m.group("id"))
     return ids

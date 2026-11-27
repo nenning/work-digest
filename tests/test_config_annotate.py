@@ -64,3 +64,41 @@ def test_file_untouched_when_nothing_changes(tmp_path):
     before = path.stat().st_mtime_ns
     assert annotate_config_file(path, lambda _id: "Coremodul") == []
     assert path.stat().st_mtime_ns == before
+
+
+def test_list_item_gets_title():
+    assert annotate_text('page_ids:\n    - "123"\n', {"123": "Meeting notes"}) == 'page_ids:\n    - "123"  # «Meeting notes»\n'
+
+
+def test_list_item_keeps_hand_written_text():
+    text = "page_ids:\n  - '456'   # «Old» note\n"
+    assert annotate_text(text, {"456": "Sandbox"}) == "page_ids:\n  - '456'   # «Sandbox» note\n"
+
+
+def test_bare_int_item_and_crlf_preserved():
+    text = "exclude_pages:\r\n  page_ids:\r\n    - 123\r\n    - 456 # keep\r\n"
+    assert annotate_text(text, {"123": "A", "456": "B"}) == (
+        "exclude_pages:\r\n  page_ids:\r\n    - 123  # «A»\r\n    - 456 # «B» keep\r\n")
+
+
+def test_items_outside_page_ids_block_untouched():
+    text = "title_patterns:\n  - 123\nother:\n  - 123\npage_ids:\n  - 1\n  other: x\n  - 123\n"
+    assert annotate_text(text, {"123": "X"}) == text
+    assert page_ids(text) == ["1"]
+
+
+def test_blank_and_comment_lines_keep_block_open():
+    text = "page_ids:  # excluded\n\n  # note\n  - 7\n"
+    assert annotate_text(text, {"7": "Seven"}) == "page_ids:  # excluded\n\n  # note\n  - 7  # «Seven»\n"
+    assert page_ids(text) == ["7"]
+
+
+def test_flow_style_left_alone():
+    text = 'page_ids: ["1", "2"]\n'
+    assert annotate_text(text, {"1": "A", "2": "B"}) == text
+    assert page_ids(text) == []
+
+
+def test_page_ids_returns_list_items_deduplicated_with_page_id_lines():
+    text = 'parent_page_id: "5"\nexclude_pages:\n  page_ids:\n    - "5"\n    - 6\n    - "6"\n'
+    assert page_ids(text) == ["5", "6"]
