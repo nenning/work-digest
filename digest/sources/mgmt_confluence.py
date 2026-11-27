@@ -153,7 +153,8 @@ def _search_all(config: AtlassianConfig, headers: dict, cql: str) -> List[dict]:
     """
     results: List[dict] = []
     url = f"{config.confluence_api_base}/wiki/rest/api/content/search"
-    params = {"cql": cql, "expand": "version,ancestors", "limit": _PAGE_SIZE}
+    expand = "version,ancestors" if config.exclude_pages else "version"
+    params = {"cql": cql, "expand": expand, "limit": _PAGE_SIZE}
     for _ in range(_MAX_SEARCH_PAGES):
         resp = requests.get(url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT)
         resp.raise_for_status()

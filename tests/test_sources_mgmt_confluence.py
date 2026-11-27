@@ -485,3 +485,19 @@ def test_team_pages_excluded_by_title_pattern():
     assert problems.take("mgmt-confluence") == ([], False)
     messages, lossy = problems.take(EXCLUDED_SCOPE)
     assert len(messages) == 1 and "2 page(s)" in messages[0] and not lossy
+
+
+def test_team_pages_search_without_exclusion_skips_ancestors_expand():
+    pages = [_make_page("1", "Page One", "/pages/1")]
+    seen_expand = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            seen_expand.append(params["expand"])
+        return _default_body_get(pages)(url, headers=headers, params=params, timeout=timeout)
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
+        items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+
+    assert [i.title for i in items] == ["Page One"]
+    assert seen_expand == ["version"]

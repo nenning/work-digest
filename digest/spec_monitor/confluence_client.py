@@ -121,7 +121,7 @@ class ConfluenceClient:
             cql += f" AND label = {_cql_quote(label)}"
         raw = self._paginate(
             f"{self._api}/content/search",
-            {"cql": cql, "limit": 100, "expand": "version,ancestors"},
+            {"cql": cql, "limit": 100, "expand": "version,ancestors" if self.exclude_pages else "version"},
             f"descendants of {parent_id}",
         )
         pages = [

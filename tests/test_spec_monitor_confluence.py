@@ -171,6 +171,7 @@ def test_search_descendants_paginates_and_builds_cql(tmp_path, patch_http):
                    {"id": "2", "title": "B", "version": 4, "when": None, "ancestors": []}]
     cql = calls[0][2]["params"]["cql"]
     assert "ancestor=668" in cql and "type=page" in cql and 'label = "spec"' in cql
+    assert calls[0][2]["params"]["expand"] == "version"
     assert calls[1][1] == "https://x.atlassian.net/wiki/rest/api/content/search?cql=x&start=1"
 
 
