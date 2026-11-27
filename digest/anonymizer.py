@@ -253,12 +253,12 @@ def _site_users(site: AtlassianConfig, auth_header: str) -> List[str]:
             return names
         start += len(page)
         names += [u["displayName"] for u in page
-                  if isinstance(u, dict) and u.get("accountType") == "atlassian" and u.get("displayName")]
+                  if isinstance(u, dict) and u.get("accountType") != "app" and u.get("displayName")]
     raise DirectoryError(f"user directory at {base} exceeded {_DIRECTORY_MAX_PAGES} pages")
 
 
 def load_directory(atlassian: AtlassianConfig, auth_header: str) -> List[str]:
-    """Display names of all human Atlassian users on the global site and every per-project url override."""
+    """Display names of all non-app users on the global site and every per-project url override."""
     names: List[str] = []
     for site in _directory_sites(atlassian):
         names += _site_users(site, auth_header)
@@ -304,8 +304,9 @@ def setup(config: Config, auth_header: str) -> Optional[Anonymizer]:
     except DirectoryError as e:
         if cfg.on_directory_failure != "continue":
             raise
-        notice = (f"{_REDUCED_PREFIX} user directory unavailable ({e}); only names seen in fetched items "
-                  "and anonymize.additional_names are replaced, emails and phone numbers still are.")
+        notice = (f"{_REDUCED_PREFIX} user directory unavailable ({e}); only names in "
+                  "anonymize.additional_names (and, in the digest and management summary, names of the people "
+                  "on fetched items) are replaced; emails and phone numbers still are.")
     configure(a)
     with _gate_lock:
         _notice = notice

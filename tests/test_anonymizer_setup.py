@@ -60,12 +60,12 @@ def _config(anonymize, atlassian=None):
 def test_load_directory_paginates_and_keeps_humans_only():
     pages = [
         _resp([_user("Hans Müller"), _user("Bot Thing", "app")]),
-        _resp([_user("Anna Meier"), {"accountType": "atlassian"}]),
+        _resp([_user("Anna Meier"), {"accountType": "atlassian"}, _user("Carl Kunde", "customer")]),
         _resp([]),
     ]
     with patch("digest.anonymizer.requests.get", side_effect=pages) as get:
         names = anonymizer.load_directory(_atlassian(), "Basic x")
-    assert names == ["Hans Müller", "Anna Meier"]
+    assert names == ["Hans Müller", "Anna Meier", "Carl Kunde"]
     assert get.call_count == 3
     first = get.call_args_list[0]
     assert first.args[0] == "https://a.example.com/rest/api/3/users/search"
@@ -73,6 +73,7 @@ def test_load_directory_paginates_and_keeps_humans_only():
     assert first.kwargs["timeout"] == 30
     assert first.kwargs["headers"]["Authorization"] == "Basic x"
     assert get.call_args_list[1].kwargs["params"]["startAt"] == 2
+    assert get.call_args_list[2].kwargs["params"]["startAt"] == 5
 
 
 def test_load_directory_covers_project_url_overrides():
@@ -137,6 +138,7 @@ def test_setup_continue_mode_sets_notice_and_still_anonymizes_emails():
     second = anonymizer.take_notices()
     assert first == second
     assert len(first) == 1 and first[0].startswith("ANONYMIZATION REDUCED:")
+    assert "in the digest and management summary" in first[0]
     out = anonymizer.outgoing("Acme wrote to hans@example.com")
     assert "hans@example.com" not in out and "Acme" not in out
     assert anonymizer.incoming(out) == "Acme wrote to hans@example.com"
