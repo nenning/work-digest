@@ -780,11 +780,14 @@ def test_mgmt_summary_notes_items_and_reports_anonymize_notices(tmp_path, monkey
     ]
     config = _make_mgmt_config(tmp_path, projects)
     ticket = _make_ticket()
+    page = SourceItem(source="confluence", kind="page_update", title="Page", url="https://x.com/p",
+                      content="diff", author="Paula Page", timestamp=datetime.now(timezone.utc))
     with (
         patch("digest.main.load_config", return_value=config),
         patch("digest.main.get_auth_header", return_value="Basic xxx"),
         patch("digest.main.fetch_team_tickets", return_value=([ticket], {"a1"})),
-        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.main.fetch_team_pages", return_value=[page]),
+        patch("digest.main.summarize_items", return_value=[_summarized()]),
         patch("digest.main.synthesize_mgmt_summary", return_value="ok"),
         patch("digest.main.send_mgmt_summary_via_smtp") as mock_send,
         patch("digest.anonymizer.note_items") as note,
@@ -792,7 +795,7 @@ def test_mgmt_summary_notes_items_and_reports_anonymize_notices(tmp_path, monkey
     ):
         from digest.main import main
         main()
-    assert [c.args[0] for c in note.call_args_list] == [[ticket], [ticket]]
+    assert [c.args[0] for c in note.call_args_list] == [[ticket], [page], [ticket], [page]]
     assert mock_send.call_args.kwargs["notices"] == ["ANONYMIZATION REDUCED: x"]
 
 

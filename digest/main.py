@@ -544,6 +544,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             print(f"  WARNING: {msg}")
             notices.append(msg)
             confluence_items = []
+        anonymizer.note_items(confluence_items)
         notices.extend(f"{project.name}: {m}" for m in problems.take("mgmt-confluence")[0])
         excluded_info.extend(f"{project.name}: {m}" for m in problems.take(EXCLUDED_SCOPE)[0])
 
