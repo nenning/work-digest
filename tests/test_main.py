@@ -967,3 +967,8 @@ def test_mgmt_only_excluded_pages_is_nothing_found_not_an_error(tmp_path, monkey
 def test_mgmt_excluded_count_appears_in_mailed_notices(tmp_path, monkeypatch):
     send = _mgmt_excluding(tmp_path, monkeypatch, [_make_ticket()])
     assert send.call_args.kwargs["notices"] == ["P1: 3 page(s) excluded by exclude_pages"]
+
+
+def test_main_tests_never_annotate_the_real_config():
+    import digest.main
+    assert isinstance(digest.main.annotate_config, MagicMock)
