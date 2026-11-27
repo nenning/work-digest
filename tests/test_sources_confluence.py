@@ -2,6 +2,9 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from digest.config import AtlassianConfig, ProjectConfig, ProjectConfluenceConfig, ProjectJiraConfig
+from digest import problems
+from digest.page_exclude import PageExclusion
+from digest.sources import confluence as confluence_src
 from digest.sources.confluence import fetch, _validate_space_keys, _compute_diff, _storage_to_text
 
 SINCE = datetime(2026, 4, 9, 7, 0, 0, tzinfo=timezone.utc)
@@ -391,3 +394,38 @@ def test_compute_diff_keeps_short_table_row_with_long_row_context():
     assert diff is not None
     assert "On Track" in diff
     assert "Portalplattform High Code" in diff
+
+
+def _excluded_config():
+    cfg = make_config()
+    cfg.exclude_pages = PageExclusion(page_ids=frozenset({"900"}))
+    return cfg
+
+
+def _page_in(page_id, title, ancestors):
+    return {**PAGE, "id": page_id, "title": title, "_links": {"webui": f"/spaces/ENG/pages/{page_id}"},
+            "ancestors": ancestors}
+
+
+def test_page_update_on_excluded_page_skipped_and_reported(mocker):
+    problems.clear()
+    results = [
+        _page_in("1", "Kept", [{"id": "5", "title": "Root"}]),
+        _page_in("2", "Dropped", [{"id": "900", "title": "Secret"}]),
+    ]
+    mocker.patch.object(confluence_src, "_cql_search", return_value=results)
+    diff = mocker.patch.object(confluence_src, "_fetch_page_diff", return_value=("Added: something new", []))
+    items = confluence_src._fetch_page_updates(_excluded_config(), "Basic xxx", "2026-04-09 07:00", SINCE, {})
+    assert [i.title for i in items] == ["Kept"]
+    assert [c.args[2] for c in diff.call_args_list] == ["1"]
+    messages, lossy = problems.take("confluence")
+    assert len(messages) == 1 and "1" in messages[0] and "excluded" in messages[0] and not lossy
+
+
+def test_mention_on_excluded_page_kept(mocker):
+    problems.clear()
+    mention = {**PAGE, "id": "2", "type": "page", "ancestors": [{"id": "900", "title": "Secret"}]}
+    mocker.patch.object(confluence_src, "_cql_search", return_value=[mention])
+    items = confluence_src._fetch_mentions(_excluded_config(), "Basic xxx", "acc", "2026-04-09 07:00", {})
+    assert [i.kind for i in items] == ["mention"]
+    assert problems.take("confluence") == ([], False)

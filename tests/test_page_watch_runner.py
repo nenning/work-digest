@@ -4,8 +4,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from digest.config import LLMConfig, PageWatchConfig, PageWatchTraceConfig, RetryConfig
+from digest.config import AtlassianConfig, LLMConfig, PageWatchConfig, PageWatchTraceConfig, RetryConfig
+from digest.page_exclude import PageExclusion
+from digest.spec_monitor import confluence_client as cc
 from digest.spec_monitor import page_watch
+from digest.spec_monitor.confluence_client import ConfluenceClient
 from digest.spec_monitor.analysis import AnalysisError
 from digest.spec_monitor.confluence_client import NoStorageBody
 from digest.spec_monitor.http import RequestFailed
@@ -162,6 +165,47 @@ def test_parent_can_be_excluded(tmp_path):
 def test_nothing_to_watch_is_a_reported_problem(tmp_path):
     report = _run(_config(tmp_path, include_parent=False), FakeClient([]))
     assert any("no page to watch" in e.message for e in report.errors)
+
+
+def test_parent_in_exclude_page_ids_is_fatal(tmp_path):
+    config = _config(tmp_path)
+    config.atlassian = SimpleNamespace(exclude_pages=PageExclusion(page_ids=frozenset({"1"})))
+    with pytest.raises(SpecMonitorFatal, match="exclude_pages"):
+        _run(config, FakeClient([]))
+
+
+def test_excluded_descendants_do_not_appear_in_report(tmp_path, mocker, capsys):
+    results = [
+        {"id": "A", "title": "Kept", "version": {"number": 1, "when": _iso(date(2026, 1, 1))}, "ancestors": []},
+        {"id": "B", "title": "Hidden", "version": {"number": 1, "when": _iso(date(2026, 1, 1))}, "ancestors": []},
+        {"id": "C", "title": "Child", "version": {"number": 1, "when": _iso(date(2026, 1, 1))},
+         "ancestors": [{"id": "B", "title": "Hidden"}]},
+    ]
+
+    class Resp:
+        status_code, ok = 200, True
+
+        def __init__(self, data):
+            self.data = data
+
+        def json(self):
+            return self.data
+
+    def fake(method, url, **kwargs):
+        if url.endswith("/content/1"):
+            return Resp({"title": "Coremodul", "version": {"when": _iso(date(2026, 1, 1))}, "ancestors": []})
+        return Resp({"results": results})
+
+    mocker.patch.object(cc, "request_with_retry", side_effect=fake)
+    atl = AtlassianConfig(url="https://x.atlassian.net", email="a@b", api_token="t",
+                          exclude_pages=PageExclusion(page_ids=frozenset({"B"})))
+    config = _config(tmp_path)
+    config.atlassian = atl
+    client = ConfluenceClient(atl, "Basic abc", RetryConfig(1, 0), page_watch.SpecCache(tmp_path))
+    report = _run(config, client)
+    assert sorted(p.page_id for p in report.pages) == ["1", "A"]
+    assert report.errors == []
+    assert "2 page(s) excluded by exclude_pages" in capsys.readouterr().out
 
 
 def test_label_is_passed_to_the_search(tmp_path):

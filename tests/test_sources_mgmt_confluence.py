@@ -9,6 +9,10 @@ from digest.config import (
     ProjectConfluenceConfig,
     ProjectJiraConfig,
 )
+import re
+
+from digest import problems
+from digest.page_exclude import PageExclusion
 from digest.sources.mgmt_confluence import fetch_team_pages
 
 
@@ -455,3 +459,28 @@ def test_fetch_team_pages_cosmetic_only_change_skipped():
         items = fetch_team_pages(make_atlassian_config(), AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
 
     assert items == []
+
+
+def test_team_pages_excluded_by_title_pattern():
+    problems.clear()
+    cfg = make_atlassian_config()
+    cfg.exclude_pages = PageExclusion(title_patterns=(re.compile("sandbox", re.IGNORECASE),))
+    pages = [
+        _make_page("1", "Page One", "/pages/1"),
+        _make_page("2", "Team Sandbox", "/pages/2"),
+        {**_make_page("3", "Child", "/pages/3"), "ancestors": [{"id": "9", "title": "My SANDBOX"}]},
+    ]
+    seen_expand = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/content/search"):
+            seen_expand.append(params["expand"])
+        return _default_body_get(pages)(url, headers=headers, params=params, timeout=timeout)
+
+    with patch("digest.sources.mgmt_confluence.requests.get", side_effect=fake_get):
+        items = fetch_team_pages(cfg, AUTH, make_mgmt_cfg(), SINCE, UNTIL, TEAM_IDS)
+
+    assert [i.title for i in items] == ["Page One"]
+    assert seen_expand == ["version,ancestors"]
+    messages, lossy = problems.take("mgmt-confluence")
+    assert len(messages) == 1 and "2 page(s)" in messages[0] and not lossy

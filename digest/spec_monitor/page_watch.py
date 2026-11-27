@@ -203,6 +203,9 @@ def run_page_watch(
     if monitor is None:
         monitor = ConfluenceMonitor(client, vision=effective_vision_llm(config), language=config.language, cache=cache)
 
+    if str(pw.parent_page_id) in config.atlassian.exclude_pages.page_ids:
+        raise SpecMonitorFatal(f"page_watch.parent_page_id {pw.parent_page_id} is listed in exclude_pages.page_ids")
+
     try:
         parent = client.get_page(pw.parent_page_id, with_body=False)
         descendants = client.search_descendants(pw.parent_page_id, pw.label)

@@ -5,6 +5,7 @@ from typing import List, Optional
 from urllib.parse import urljoin
 
 from digest.config import AtlassianConfig, RetryConfig
+from digest.page_exclude import PageExclusion
 from digest.spec_monitor.cache import SpecCache
 from digest.spec_monitor.http import RequestFailed, request_with_retry
 from digest.spec_monitor.models import VersionPoint
@@ -47,6 +48,10 @@ class ConfluenceClient:
         self._cache = cache
         self._root = atlassian.confluence_api_base.rstrip("/") + "/wiki"
         self._api = self._root + "/rest/api"
+
+    @property
+    def exclude_pages(self) -> PageExclusion:
+        return self._atlassian.exclude_pages
 
     def page_url(self, page_id: str, version: Optional[int] = None) -> str:
         url = f"{self._atlassian.url.rstrip('/')}/wiki/pages/viewpage.action?pageId={page_id}"
@@ -116,14 +121,18 @@ class ConfluenceClient:
             cql += f" AND label = {_cql_quote(label)}"
         raw = self._paginate(
             f"{self._api}/content/search",
-            {"cql": cql, "limit": 100, "expand": "version"},
+            {"cql": cql, "limit": 100, "expand": "version,ancestors"},
             f"descendants of {parent_id}",
         )
-        return [
+        pages = [
             {"id": str(r["id"]), "title": r.get("title", ""), "version": (r.get("version") or {}).get("number"),
-             "when": (r.get("version") or {}).get("when")}
+             "when": (r.get("version") or {}).get("when"), "ancestors": r.get("ancestors") or []}
             for r in raw
         ]
+        kept = [p for p in pages if not self.exclude_pages.is_excluded(p["id"], p["title"], p["ancestors"])]
+        if len(kept) < len(pages):
+            print(f"{len(pages) - len(kept)} page(s) excluded by exclude_pages")
+        return kept
 
     def get_labels(self, page_id: str) -> List[str]:
         raw = self._paginate(f"{self._api}/content/{page_id}/label", {"limit": 200}, f"labels of page {page_id}")

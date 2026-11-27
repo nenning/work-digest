@@ -70,6 +70,11 @@ def fetch_team_pages(
     t0 = time.monotonic()
     results = _search_all(config, headers, cql)
     log.debug("Confluence search returned %d result(s) in %.1fs", len(results), time.monotonic() - t0)
+    exclusion = config.exclude_pages
+    kept = [r for r in results if not exclusion.is_excluded(r["id"], r.get("title", ""), r.get("ancestors") or [])]
+    if len(kept) < len(results):
+        problems.report("mgmt-confluence", f"{len(results) - len(kept)} page(s) excluded by exclude_pages", lossy=False)
+    results = kept
     if not results:
         return []
 
@@ -147,7 +152,7 @@ def _search_all(config: AtlassianConfig, headers: dict, cql: str) -> List[dict]:
     """
     results: List[dict] = []
     url = f"{config.confluence_api_base}/wiki/rest/api/content/search"
-    params = {"cql": cql, "expand": "version", "limit": _PAGE_SIZE}
+    params = {"cql": cql, "expand": "version,ancestors", "limit": _PAGE_SIZE}
     for _ in range(_MAX_SEARCH_PAGES):
         resp = requests.get(url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT)
         resp.raise_for_status()

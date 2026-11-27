@@ -176,6 +176,12 @@ def _fetch_page_updates(
     # avoids a guaranteed follow-up GET per page instead of speculatively pre-fetching.
     results = _cql_search(config, auth_header, cql, expand="history,version,ancestors,body.storage,space")
 
+    exclusion = config.exclude_pages
+    kept = [r for r in results if not exclusion.is_excluded(r["id"], r.get("title", ""), r.get("ancestors") or [])]
+    if len(kept) < len(results):
+        problems.report("confluence", f"{len(results) - len(kept)} page(s) excluded by exclude_pages", lossy=False)
+    results = kept
+
     if not results:
         return []
 

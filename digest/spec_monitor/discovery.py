@@ -45,6 +45,9 @@ def discover_specs(client: ConfluenceClient, cfg: SpecMonitorConfig, only: Optio
     if cfg.selector_type not in ("page_properties_id", "label"):
         raise ValueError(f"unknown spec selector type '{cfg.selector_type}'")
 
+    if str(cfg.parent_page_id) in client.exclude_pages.page_ids:
+        raise ValueError(f"spec_monitor.parent_page_id {cfg.parent_page_id} is listed in exclude_pages.page_ids")
+
     candidates = client.search_descendants(cfg.parent_page_id, None)
     ref = needle = None
     if only is not None:

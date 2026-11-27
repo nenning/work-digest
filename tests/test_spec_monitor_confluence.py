@@ -1,9 +1,11 @@
+import re
 from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
 from digest.config import AtlassianConfig, RetryConfig
+from digest.page_exclude import PageExclusion
 from digest.spec_monitor import confluence_client as cc
 from digest.spec_monitor.cache import SpecCache
 from digest.spec_monitor.confluence_client import ConfluenceClient, pick_version_at
@@ -165,10 +167,36 @@ def test_search_descendants_paginates_and_builds_cql(tmp_path, patch_http):
     client, calls, fake = make_client(tmp_path, router)
     patch_http(fake)
     out = client.search_descendants("668", label="spec")
-    assert out == [{"id": "1", "title": "A", "version": 3, "when": None}, {"id": "2", "title": "B", "version": 4, "when": None}]
+    assert out == [{"id": "1", "title": "A", "version": 3, "when": None, "ancestors": []},
+                   {"id": "2", "title": "B", "version": 4, "when": None, "ancestors": []}]
     cql = calls[0][2]["params"]["cql"]
     assert "ancestor=668" in cql and "type=page" in cql and 'label = "spec"' in cql
     assert calls[1][1] == "https://x.atlassian.net/wiki/rest/api/content/search?cql=x&start=1"
+
+
+def test_search_descendants_drops_excluded_subtree_and_returns_ancestors(tmp_path, patch_http, capsys):
+    results = [
+        {"id": "1", "title": "A", "version": {"number": 3}, "ancestors": [{"id": "668", "title": "Root"}]},
+        {"id": "2", "title": "Sandbox page", "version": {"number": 1}, "ancestors": [{"id": "668", "title": "Root"}]},
+        {"id": "3", "title": "Deep", "version": {"number": 1},
+         "ancestors": [{"id": "668", "title": "Root"}, {"id": "77", "title": "Hidden"}]},
+    ]
+    client, calls, fake = make_client(tmp_path, lambda m, u, k: FakeResp(data={"results": results}))
+    client._atlassian.exclude_pages = PageExclusion(page_ids=frozenset({"77"}),
+                                                    title_patterns=(re.compile("sandbox", re.IGNORECASE),))
+    patch_http(fake)
+    out = client.search_descendants("668")
+    assert [e["id"] for e in out] == ["1"]
+    assert out[0]["ancestors"] == [{"id": "668", "title": "Root"}]
+    assert calls[0][2]["params"]["expand"] == "version,ancestors"
+    assert "2 page(s) excluded by exclude_pages" in capsys.readouterr().out
+
+
+def test_search_descendants_prints_nothing_without_exclusions(tmp_path, patch_http, capsys):
+    client, calls, fake = make_client(tmp_path, lambda m, u, k: FakeResp(data={"results": [{"id": "1", "title": "A"}]}))
+    patch_http(fake)
+    client.search_descendants("668")
+    assert capsys.readouterr().out == ""
 
 
 def test_find_page_id_uses_title_and_space(tmp_path, patch_http):

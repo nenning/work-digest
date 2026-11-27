@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from digest.config import SpecMonitorConfig
+from digest.page_exclude import PageExclusion
 from digest.spec_monitor import discovery
 from digest.spec_monitor.confluence_client import ConfluenceClient
 from digest.spec_monitor.discovery import discover_specs
@@ -255,3 +256,10 @@ def test_zero_specs_is_a_reported_problem(client):
     d = discover_specs(client, cfg())
     assert d.specs == []
     assert len(d.problems) == 1 and "no spec found" in d.problems[0].message
+
+
+def test_parent_in_exclude_page_ids_is_fatal(client):
+    client.exclude_pages = PageExclusion(page_ids=frozenset({"668"}))
+    with pytest.raises(ValueError, match="exclude_pages"):
+        discover_specs(client, cfg())
+    client.search_descendants.assert_not_called()
