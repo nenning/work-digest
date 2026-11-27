@@ -51,7 +51,7 @@ pip install -r requirements.txt
 | `llm.heavy_models` | No | `claude-sonnet-5-5` | Model(s) for heavy calls: everything of `--mgmt-summary`, spec monitor change request / delta spec / rewrites. Empty = `llm.summary_models` |
 | `llm.vision_model` | No | `claude-opus-5-5` | Single model for the spec monitor's draw.io image comparison. Empty = first of `llm.heavy_models`, else `llm.summary_models` |
 | `exclude_pages.page_ids` | No | `["123456"]` | Confluence page ids to skip with their whole subtree; see [Excluding Confluence pages](#excluding-confluence-pages) |
-| `exclude_pages.title_patterns` | No | `['Sandbox']` | Regexes (case-insensitive) matched against the page title and every ancestor's title |
+| `exclude_pages.title_patterns` | No | `['\bSandbox\b']` | Regexes (case-insensitive) matched against the page title and every ancestor's title; must be a list |
 | `anonymize.enabled` | No | `false` | Mask names, emails and phone numbers before text goes to the LLM; see [Anonymization](#anonymization) |
 | `anonymize.additional_names` | No | `["Erika Muster", "Muster"]` | Names not in the Atlassian user directory (customers, externals); the only way to mask a bare first name or surname |
 | `anonymize.on_directory_failure` | No | `fail` | `fail` aborts the run when the user directory cannot be loaded; `continue` runs with reduced anonymization and a notice |
@@ -86,10 +86,10 @@ exclude_pages:
   page_ids:                 # block-style list: the tool writes «Title» as a comment behind each id on the next run
     - "123456"
   title_patterns:           # regex, case-insensitive, searched in the page title and in every ancestor's title
-    - 'Sandbox'
+    - '\bSandbox\b'
 ```
 
-An excluded page and its whole subtree are skipped in the personal digest, `--mgmt-summary`, `--page-watch` and `--spec-monitor`. Flow-style `page_ids: ["123"]` works but is not annotated with titles. Confluence mention items (`@you` on a page) are not dropped. A `page_watch.parent_page_id` or `spec_monitor.parent_page_id` listed in `page_ids` is a config error; a parent excluded only by a title pattern or an ancestor is still processed (page watch with `include_parent`), its descendants are skipped. The count of skipped pages is a notice in the digest / management summary email and a console line in page watch / spec monitor.
+An excluded page and its whole subtree are skipped in the personal digest, `--mgmt-summary`, `--page-watch` and `--spec-monitor`. Flow-style `page_ids: ["123"]` works but is not annotated with titles. Confluence mention items (`@you` on a page) are not dropped. A `page_watch.parent_page_id` or `spec_monitor.parent_page_id` listed in `page_ids` is a config error; a parent excluded only by a title pattern or an ancestor is still processed (page watch with `include_parent`), its descendants are skipped. Both keys must be lists, even with one entry. The count of skipped pages is informational: it is listed in the digest / management summary email notices when an email is sent, otherwise it is only printed on the console (a run whose only activity is on excluded pages ends as "Nothing new", exit 0); page watch / spec monitor print it on the console.
 
 ### Anonymization
 
@@ -100,9 +100,9 @@ anonymize:
   on_directory_failure: fail   # fail | continue
 ```
 
-With `enabled: true` every LLM prompt is rewritten: full names (either order, `Last, First`), email addresses and phone numbers become `PERSON_001` / `EMAIL_001` / `PHONE_001`, and the LLM's answer is mapped back before it lands in the email or report. Names come from the Atlassian user directory (Jira users search; scoped tokens need the `read:jira-user` scope), from authors/assignees of the fetched items and from `additional_names`. A bare first name or surname is not matched unless listed in `additional_names`.
+With `enabled: true` every LLM prompt is rewritten: full names (either order, `Last, First`), email addresses and phone numbers become `PERSON_001` / `EMAIL_001` / `PHONE_001`, and the LLM's answer is mapped back before it lands in the email or report. Names come from the Atlassian user directory (Jira users search, every account except apps/bots; scoped tokens need the `read:jira-user` scope), from authors/assignees of the fetched items and from `additional_names`. A bare first name or surname is not matched unless listed in `additional_names`.
 
-Not covered: phones glued to letters, emails with unicode local parts, `ß`/`ss` and `ü`/`ue` spellings, a literal `PERSON_001` in source text, names outside the three sources, images (draw.io comparison), Teams and Outlook items (not anonymized at all). Local caches and the delivered email keep the real text.
+Not covered: phones glued to letters, emails with unicode local parts, `ß`/`ss` and `ü`/`ue` spellings, names outside the three sources, images (draw.io comparison), Teams and Outlook items (not anonymized at all). Local caches and the delivered email keep the real text.
 
 If the directory cannot be loaded, `fail` stops the run before any LLM call (non-zero exit, popup); `continue` goes on with `additional_names` and item names and adds an `ANONYMIZATION REDUCED` notice (email notices for digest and management summary, console for spec monitor and page watch). Details: [docs/architecture/anonymize.md](docs/architecture/anonymize.md).
 

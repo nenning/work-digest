@@ -97,6 +97,11 @@ version-history walk (`_walk_version_history`) instead:
   (not just the first one found) in the same pass, and
 - locates the pre-window baseline version.
 
+`exclude_pages` (see `confluence.md`) filters the search results; the count of dropped pages is informational
+(`P1: N page(s) excluded by exclude_pages`, email notice when the summary is sent, console only otherwise, never an
+error). With anonymization on, the authors of both the Jira tickets and the Confluence pages are added to the name list
+before any LLM call (`docs/architecture/anonymize.md`).
+
 `ignore_users` is applied here too. The diff is computed against that
 resolved in-window version fetched explicitly by version number, not the
 page's current live body — otherwise a report over a past window (`--sprint`,
