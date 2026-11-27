@@ -275,3 +275,32 @@ def test_nbsp_phone_from_confluence_storage():
     a = Anonymizer()
     anon = a.anonymize(_storage_to_text("<p>Kontakt: 079&nbsp;123&nbsp;45&nbsp;67</p>"))
     assert "123" not in anon and "PHONE_001" in anon
+
+
+def _issue_one_of_each():
+    a = Anonymizer(["Hans Muster"])
+    a.anonymize("Hans Muster hans@x.ch 079 123 45 67")
+    return a
+
+
+def test_restore_ignores_ordinary_identifiers():
+    a = _issue_one_of_each()
+    text = "Field email_1, HOME_PHONE_1, person_1_id, XPERSON_001, HOME_PHONE_001, PERSON_0001"
+    assert a.restore(text) == text
+    assert a.leftover("email_7 and phone_2 and HOME_PHONE_009") == []
+
+
+def test_restore_still_matches_placeholder_forms():
+    a = _issue_one_of_each()
+    assert a.restore("PERSON_001s, person_001, EMAIL_001.") == "Hans Musters, Hans Muster, hans@x.ch."
+    assert a.leftover("PERSON_999") == ["PERSON_999"]
+
+
+def test_literal_placeholder_in_source_survives_restore():
+    a = Anonymizer(["Hans Muster"])
+    text = "Template PERSON_001 filled by Hans Muster"
+    anon = a.anonymize(text)
+    assert anon.startswith("Template PERSON_001 filled by PERSON_")
+    assert anon != "Template PERSON_001 filled by PERSON_001"
+    assert a.restore(anon) == text
+    assert a.leftover(anon) == []

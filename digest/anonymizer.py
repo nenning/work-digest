@@ -18,7 +18,7 @@ _DATE_RE = re.compile(
     r"|(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.(?:19|20)\d\d)(?!\d)"
 )
 _PHONE_TOKEN_RE = re.compile(r"\+?\d+")
-_PLACEHOLDER_RE = re.compile(r"(?i)(PERSON|EMAIL|PHONE)_(\d+)")
+_PLACEHOLDER_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])(PERSON|EMAIL|PHONE)_(\d{3,})(?!\d)")
 _SEP = " "
 _END = ""
 
@@ -75,6 +75,10 @@ def _phone_key(raw: str) -> str:
     return digits
 
 
+def _placeholder_key(m: re.Match) -> Tuple[str, str]:
+    return m.group(1).upper(), m.group(2)
+
+
 def _trie_regex(node: dict) -> str:
     branches = [
         (r"\s+" if ch == _SEP else re.escape(ch)) + _trie_regex(child)
@@ -96,8 +100,9 @@ class Anonymizer:
         self._person_by_key: Dict[str, str] = {}
         self._pattern: Optional[re.Pattern] = None
         self._placeholder: Dict[Tuple[str, str], str] = {}
-        self._original: Dict[Tuple[str, int], str] = {}
+        self._original: Dict[Tuple[str, str], str] = {}
         self._counter = {"PERSON": 0, "EMAIL": 0, "PHONE": 0}
+        self._reserved: set = set()
         self.add_names(names)
 
     def add_names(self, names: Iterable[str], allow_single_token: bool = False) -> None:
@@ -133,10 +138,12 @@ class Anonymizer:
             ph = self._placeholder.get((kind, key))
             if ph is None:
                 self._counter[kind] += 1
+                while (kind, f"{self._counter[kind]:03d}") in self._reserved:
+                    self._counter[kind] += 1
                 n = self._counter[kind]
                 ph = f"{kind}_{n:03d}"
                 self._placeholder[(kind, key)] = ph
-                self._original[(kind, n)] = original
+                self._original[(kind, f"{n:03d}")] = original
             return ph
 
     def _person(self, m: re.Match) -> str:
@@ -171,6 +178,11 @@ class Anonymizer:
         return "".join(out) + raw[pos:]
 
     def anonymize(self, text: str) -> str:
+        literals = {_placeholder_key(m) for m in _PLACEHOLDER_RE.finditer(text)}
+        if literals:
+            with self._lock:
+                # Never issue a number already present literally in the source, so restore leaves it alone.
+                self._reserved |= literals - set(self._original)
         text = _EMAIL_RE.sub(lambda m: self._issue("EMAIL", m.group(0).lower(), m.group(0)), text)
         text = _PHONE_RE.sub(self._phone, text)
         pattern = self._names_pattern()
@@ -180,7 +192,7 @@ class Anonymizer:
 
     def _lookup(self, m: re.Match) -> Optional[str]:
         with self._lock:
-            return self._original.get((m.group(1).upper(), int(m.group(2))))
+            return self._original.get(_placeholder_key(m))
 
     def restore(self, text: str) -> str:
         def repl(m: re.Match) -> str:
@@ -192,7 +204,7 @@ class Anonymizer:
         """Placeholder-shaped tokens in text that this instance never issued."""
         out: List[str] = []
         for m in _PLACEHOLDER_RE.finditer(text):
-            if self._lookup(m) is None and m.group(0) not in out:
+            if self._lookup(m) is None and _placeholder_key(m) not in self._reserved and m.group(0) not in out:
                 out.append(m.group(0))
         return out
 
