@@ -272,6 +272,12 @@ def configure(a: Optional[Anonymizer]) -> None:
             _notice = None
 
 
+def reset_reported() -> None:
+    """Forget which placeholder problems were reported, for when the caller clears the problems."""
+    with _gate_lock:
+        _reported.clear()
+
+
 def setup(config: Config, auth_header: str) -> Optional[Anonymizer]:
     global _notice
     cfg = config.anonymize

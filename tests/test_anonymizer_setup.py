@@ -204,3 +204,14 @@ def test_note_items_is_noop_when_gate_off():
     )
     anonymizer.note_items([item])
     assert anonymizer.outgoing("Hans Müller") == "Hans Müller"
+
+
+def test_reset_reported_lets_a_cleared_problem_be_reported_again():
+    anonymizer.configure(anonymizer.Anonymizer(["Hans Müller"]))
+    anonymizer.incoming("PERSON_009")
+    assert len(anonymizer.take_notices()) == 1
+    anonymizer.incoming("PERSON_009")
+    assert anonymizer.take_notices() == []
+    anonymizer.reset_reported()
+    anonymizer.incoming("PERSON_009")
+    assert len(anonymizer.take_notices()) == 1

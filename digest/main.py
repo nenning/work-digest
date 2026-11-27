@@ -577,9 +577,10 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
         ))
 
     if not sections:
-        _print_notices(notices)
+        all_notices = notices + anonymizer.take_notices()
+        _print_notices(all_notices)
         if notices:
-            raise RuntimeError("Nothing found and errors occurred:\n  - " + "\n  - ".join(notices))
+            raise RuntimeError("Nothing found and errors occurred:\n  - " + "\n  - ".join(all_notices))
         print("Nothing found for the given time range.")
         return
 
@@ -623,6 +624,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
 
 def _run(args, config, state_file: Path, cache_file: Path, command_line: str) -> None:
     problems.clear()  # a retry after LLMEndpointError must not inherit the previous attempt's problems
+    anonymizer.reset_reported()
     notices: List[str] = []
     state = load_state(state_file)
     notices.extend(problems.take("state")[0])
@@ -737,8 +739,9 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
     model_stats: dict = {}
     anonymizer.note_items(all_items)
     summarized: List[SummarizedItem] = summarize_items(all_items, config.llm, notices=notices, language=config.language, model_stats=model_stats)
+    anonymize_notices = anonymizer.take_notices()
     if summarized:
-        notices.extend(anonymizer.take_notices())
+        notices.extend(anonymize_notices)
     t_sum_end = time.monotonic()
 
     # --- Deliver ---
@@ -805,7 +808,9 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
                 "state was not updated, so the next run covers the same items again."
             )
         if notices:
-            raise RuntimeError("Nothing could be reported and errors occurred:\n  - " + "\n  - ".join(notices))
+            raise RuntimeError("Nothing could be reported and errors occurred:\n  - "
+                               + "\n  - ".join(notices + anonymize_notices))
+        _print_notices(anonymize_notices)
         print("Nothing to report after summarizing (all changes were cosmetic).")
         return
 

@@ -794,3 +794,81 @@ def test_mgmt_summary_notes_items_and_reports_anonymize_notices(tmp_path, monkey
         main()
     assert [c.args[0] for c in note.call_args_list] == [[ticket], [ticket]]
     assert mock_send.call_args.kwargs["notices"] == ["ANONYMIZATION REDUCED: x"]
+
+
+def _continue_mode_config(tmp_path):
+    cfg = _make_config(tmp_path, smtp=True)
+    cfg.anonymize = AnonymizeConfig(enabled=True, on_directory_failure="continue")
+    return cfg
+
+
+def _run_personal(tmp_path, monkeypatch, summarize, send, capsys=None):
+    from digest.anonymizer import DirectoryError
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
+    with (
+        patch("digest.main.load_config", return_value=_continue_mode_config(tmp_path)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.jira.fetch", return_value=[_item()]),
+        patch("digest.main.summarize_items", side_effect=summarize),
+        patch("digest.main.send_via_smtp", send),
+        patch("digest.main.time.sleep"),
+        patch("digest.anonymizer.load_directory", side_effect=DirectoryError("down")),
+    ):
+        from digest.main import main
+        main()
+
+
+def test_all_cosmetic_run_prints_anonymize_notice_and_exits_cleanly(tmp_path, monkeypatch, capsys):
+    send = MagicMock(return_value=False)
+    _run_personal(tmp_path, monkeypatch, lambda *a, **k: [], send)
+    out = capsys.readouterr().out
+    assert "ANONYMIZATION REDUCED:" in out
+    assert "Nothing to report after summarizing" in out
+
+
+def test_nothing_reported_error_includes_anonymize_notices(tmp_path, monkeypatch):
+    def summarize(items, llm, notices, **kw):
+        notices.append("summarizer: model failed")
+        return []
+    with pytest.raises(RuntimeError) as exc:
+        _run_personal(tmp_path, monkeypatch, summarize, MagicMock(return_value=False))
+    text = str(exc.value)
+    assert "summarizer: model failed" in text and "ANONYMIZATION REDUCED:" in text
+
+
+def test_mgmt_summary_without_sections_prints_anonymize_notice(tmp_path, monkeypatch, capsys):
+    from digest.anonymizer import DirectoryError
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    project = ProjectConfig(name="P1", jira=ProjectJiraConfig(project="PROJ"), mgmt_summary=ProjectMgmtSummaryConfig())
+    config = _make_mgmt_config(tmp_path, [project])
+    config.anonymize = AnonymizeConfig(enabled=True, on_directory_failure="continue")
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=([], set())),
+        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.anonymizer.load_directory", side_effect=DirectoryError("down")),
+    ):
+        from digest.main import main
+        main()
+    assert "ANONYMIZATION REDUCED:" in capsys.readouterr().out
+
+
+def test_placeholder_problem_is_reported_again_after_a_discarded_retry_attempt(tmp_path, monkeypatch):
+    from digest import anonymizer
+    from digest.summarizer import LLMEndpointError
+    calls = []
+
+    def summarize(items, llm, notices, **kw):
+        anonymizer.incoming("PERSON_009")
+        calls.append(1)
+        if len(calls) == 1:
+            raise LLMEndpointError("endpoint down")
+        return [_summarized()]
+
+    send = MagicMock(return_value=True)
+    _run_personal(tmp_path, monkeypatch, summarize, send)
+    assert len(calls) == 2
+    assert any("PERSON_009" in n for n in send.call_args.kwargs["notices"])
