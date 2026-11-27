@@ -10,6 +10,7 @@ import pytest
 
 from digest.main import parse_since
 from digest.config import (
+    AnonymizeConfig,
     AtlassianConfig,
     Config,
     EmailConfig,
@@ -63,6 +64,7 @@ def _make_config(tmp_path: Path, smtp: bool = False):
     cfg.email.subject_prefix = "[Digest]"
     cfg.email.recipient = "user@example.com"
     cfg.smtp = SmtpConfig(host="smtp.example.com", username="user@example.com") if smtp else None
+    cfg.anonymize = AnonymizeConfig()
     return cfg
 
 
@@ -676,3 +678,119 @@ def test_mgmt_failed_send_and_confluence_notice(tmp_path, monkeypatch):
         with pytest.raises(RuntimeError, match="could not be delivered"):
             main()
     assert any("wiki down" in n for n in send.call_args.kwargs["notices"])
+
+
+# ---------------------------------------------------------------------------
+# Anonymization wiring
+# ---------------------------------------------------------------------------
+
+def test_main_sets_up_anonymizer_before_dispatch(tmp_path, monkeypatch):
+    for argv in (["--spec-monitor", "--dry-run"], ["--dry-run", "--source", "jira"]):
+        monkeypatch.setattr(sys, "argv", ["main.py", *argv])
+        cfg = _make_config(tmp_path, smtp=True)
+        order = []
+        with (
+            patch("digest.main.load_config", return_value=cfg),
+            patch("digest.main.resolve_atlassian_config", side_effect=lambda a: a),
+            patch("digest.main.get_auth_header", return_value="Basic xxx"),
+            patch("digest.main.get_token", return_value="tok"),
+            patch("digest.main.load_state", return_value={}),
+            patch("digest.main.jira.fetch", return_value=[]),
+            patch("digest.anonymizer.setup", side_effect=lambda *a: order.append("setup")) as setup,
+            patch("digest.spec_monitor.cli.dispatch", side_effect=lambda *a: order.append("dispatch")),
+        ):
+            from digest.main import main
+            main()
+        setup.assert_called_once_with(cfg, "Basic xxx")
+        if "--spec-monitor" in argv:
+            assert order == ["setup", "dispatch"]
+
+
+def test_directory_failure_in_fail_mode_exits_nonzero(tmp_path, monkeypatch):
+    from digest.anonymizer import DirectoryError
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
+    cfg = _make_config(tmp_path, smtp=True)
+    cfg.anonymize = AnonymizeConfig(enabled=True, on_directory_failure="fail")
+    fetch = MagicMock(return_value=[])
+    with (
+        patch("digest.main.load_config", return_value=cfg),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.jira.fetch", fetch),
+        patch("digest.anonymizer.load_directory", side_effect=DirectoryError("boom 503")),
+    ):
+        from digest.main import main
+        with pytest.raises(RuntimeError, match=r"user directory.*boom 503.*on_directory_failure"):
+            main()
+    fetch.assert_not_called()
+
+
+def _summarized():
+    from digest.models import SummarizedItem
+    return SummarizedItem(source="jira", kind="comment", title="T", url="https://x.com", summary="s",
+                          author="A", timestamp=datetime(2026, 4, 9, tzinfo=timezone.utc))
+
+
+def test_personal_digest_notices_include_anonymize_notices(tmp_path, monkeypatch):
+    from digest.anonymizer import DirectoryError
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
+    cfg = _make_config(tmp_path, smtp=True)
+    cfg.anonymize = AnonymizeConfig(enabled=True, on_directory_failure="continue")
+    mock_send = MagicMock(return_value=True)
+    with (
+        patch("digest.main.load_config", return_value=cfg),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.jira.fetch", return_value=[_item()]),
+        patch("digest.main.summarize_items", return_value=[_summarized()]),
+        patch("digest.main.send_via_smtp", mock_send),
+        patch("digest.anonymizer.load_directory", side_effect=DirectoryError("down")),
+    ):
+        from digest.main import main
+        main()
+    notices = mock_send.call_args.kwargs["notices"]
+    assert any(n.startswith("ANONYMIZATION REDUCED:") for n in notices)
+
+
+def test_personal_digest_notes_items_before_summarizing(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--source", "jira"])
+    order = []
+    item = _item()
+    with (
+        patch("digest.main.load_config", return_value=_make_config(tmp_path, smtp=True)),
+        patch("digest.main.load_state", return_value={}),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.get_token", return_value="tok"),
+        patch("digest.main.jira.fetch", return_value=[item]),
+        patch("digest.anonymizer.note_items", side_effect=lambda items: order.append(("note", list(items)))),
+        patch("digest.main.summarize_items", side_effect=lambda *a, **k: order.append("summarize") or []),
+        patch("digest.main.send_via_smtp", return_value=True),
+    ):
+        from digest.main import main
+        main()
+    assert order == [("note", [item]), "summarize"]
+
+
+def test_mgmt_summary_notes_items_and_reports_anonymize_notices(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mgmt-summary", "--since", "7d"])
+    projects = [
+        ProjectConfig(name=n, jira=ProjectJiraConfig(project=n), mgmt_summary=ProjectMgmtSummaryConfig())
+        for n in ("P1", "P2")
+    ]
+    config = _make_mgmt_config(tmp_path, projects)
+    ticket = _make_ticket()
+    with (
+        patch("digest.main.load_config", return_value=config),
+        patch("digest.main.get_auth_header", return_value="Basic xxx"),
+        patch("digest.main.fetch_team_tickets", return_value=([ticket], {"a1"})),
+        patch("digest.main.fetch_team_pages", return_value=[]),
+        patch("digest.main.synthesize_mgmt_summary", return_value="ok"),
+        patch("digest.main.send_mgmt_summary_via_smtp") as mock_send,
+        patch("digest.anonymizer.note_items") as note,
+        patch("digest.anonymizer.take_notices", return_value=["ANONYMIZATION REDUCED: x"]),
+    ):
+        from digest.main import main
+        main()
+    assert [c.args[0] for c in note.call_args_list] == [[ticket], [ticket]]
+    assert mock_send.call_args.kwargs["notices"] == ["ANONYMIZATION REDUCED: x"]

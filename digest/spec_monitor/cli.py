@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from digest import usage
+from digest import anonymizer, usage
 from digest.auth.atlassian import get_auth_header
 from digest.auth.microsoft import get_token
 from digest.config import Config
@@ -75,6 +75,8 @@ def dispatch(args, config: Config, cache_file: Path, command_line: str) -> None:
     try:
         _dispatch(args, config, cache_file, command_line)
     finally:
+        for notice in anonymizer.take_notices():
+            print(notice)
         stats = usage.stop()
         if stats is not None:
             report = usage.format_report(stats)

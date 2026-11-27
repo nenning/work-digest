@@ -28,7 +28,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from digest import problems
+from digest import anonymizer, problems
 from digest.auth.atlassian import get_auth_header, resolve_atlassian_config
 from digest.auth.microsoft import get_token
 from digest.config import MAX_LINK_DEPTH, heavy_llm, load_config
@@ -394,6 +394,14 @@ def main() -> None:
 
     with process_lock(data_dir):
         annotate_config(config_path, config)
+        try:
+            anonymizer.setup(config, get_auth_header(config.atlassian))
+        except anonymizer.DirectoryError as exc:
+            raise RuntimeError(
+                f"Anonymization is enabled but the user directory could not be loaded: {exc}. "
+                "Nothing was sent to an LLM. Fix the Atlassian access, or set anonymize.on_directory_failure: continue "
+                "to run with reduced anonymization."
+            ) from exc
         if spec_mode:
             from digest.spec_monitor.cli import dispatch
             dispatch(args, config, cache_file, command_line)
@@ -511,6 +519,7 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             pconf, atlassian_auth, mgmt_cfg, since, until, sprint_ids=sprint_ids,
             combine_subtasks=args.combine_subtasks,
         )
+        anonymizer.note_items(jira_items)
         done_n = sum(1 for i in jira_items if i.kind == "ticket_done")
         wip_n  = sum(1 for i in jira_items if i.kind == "ticket_wip")
         todo_n = sum(1 for i in jira_items if i.kind == "ticket_todo")
@@ -573,6 +582,8 @@ def _run_mgmt_summary(args, config, cache_file: Path, command_line: str) -> None
             raise RuntimeError("Nothing found and errors occurred:\n  - " + "\n  - ".join(notices))
         print("Nothing found for the given time range.")
         return
+
+    notices.extend(anonymizer.take_notices())
 
     # --- Deliver: one email with one section per project that had content ---
     recipient = config.mgmt_summary.recipient or config.email.recipient
@@ -724,7 +735,10 @@ def _run(args, config, state_file: Path, cache_file: Path, command_line: str) ->
     print()
     t_sum_start = time.monotonic()
     model_stats: dict = {}
+    anonymizer.note_items(all_items)
     summarized: List[SummarizedItem] = summarize_items(all_items, config.llm, notices=notices, language=config.language, model_stats=model_stats)
+    if summarized:
+        notices.extend(anonymizer.take_notices())
     t_sum_end = time.monotonic()
 
     # --- Deliver ---

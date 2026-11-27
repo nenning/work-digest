@@ -159,6 +159,7 @@ def _main(monkeypatch, tmp_path, *argv):
     monkeypatch.setattr(sys, "argv", ["main.py", *argv])
     config = MagicMock()
     config.data_dir = tmp_path
+    config.anonymize.enabled = False
     with (
         patch("digest.main.load_config", return_value=config),
         patch("digest.main.resolve_atlassian_config", side_effect=lambda a: a),
@@ -368,3 +369,9 @@ def test_apply_cli_passes_dry_run(tmp_path, mocker):
     run, args = _apply(mocker, dry_run=True)
     cli.run_page_watch_apply_cli(args, _config(tmp_path))
     assert run.call_args.kwargs["dry_run"] is True
+
+
+def test_dispatch_prints_anonymize_notices_without_failing_the_run(tmp_path, stubs, mocker, capsys):
+    mocker.patch("digest.anonymizer.take_notices", return_value=["ANONYMIZATION REDUCED: directory down"])
+    cli.dispatch(_args(dry_run=True), _config(tmp_path), tmp_path / "t", "cmd")
+    assert "ANONYMIZATION REDUCED: directory down" in capsys.readouterr().out
