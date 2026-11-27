@@ -156,6 +156,44 @@ def test_setup_success_uses_directory_and_additional_names():
     assert "Hans alone" in out
 
 
+ADDITIONAL_NAMES = ["Michael Zürcher", "Theodor Brüggemann", "Yannick Beaud"]
+
+
+@pytest.mark.parametrize("mode", ["fail", "continue"])
+@pytest.mark.parametrize("text, absent, restored", [
+    ("Michael Zürcher fragt nach dem Stand", ["Michael", "Zürcher"], "Michael Zürcher fragt nach dem Stand"),
+    ("Zürcher, Michael fragt nach dem Stand", ["Michael", "Zürcher"], "Michael Zürcher fragt nach dem Stand"),
+    ("MICHAEL ZÜRCHER fragt", ["MICHAEL", "ZÜRCHER"], "Michael Zürcher fragt"),
+    ("Theodor Brüggemanns Ticket ist offen", ["Theodor", "Brüggemann"], "Theodor Brüggemanns Ticket ist offen"),
+    ("Yannick Beaud hat kommentiert", ["Yannick", "Beaud"], "Yannick Beaud hat kommentiert"),
+    ("Beaud Yannick und Michael Zürcher", ["Yannick", "Beaud", "Michael", "Zürcher"], "Yannick Beaud und Michael Zürcher"),
+])
+def test_additional_names_are_replaced_and_restored_in_both_failure_modes(mode, text, absent, restored):
+    cfg = _config(AnonymizeConfig(enabled=True, additional_names=ADDITIONAL_NAMES, on_directory_failure=mode))
+    directory = [_resp([_user("Hans Müller")]), _resp([])] if mode == "fail" else [_resp([], status=500)]
+    with patch("digest.anonymizer.requests.get", side_effect=directory):
+        anonymizer.setup(cfg, "Basic x")
+    out = anonymizer.outgoing(text)
+    for part in absent:
+        assert part not in out
+    assert anonymizer.incoming(out) == restored
+
+
+def test_additional_names_are_not_replaced_when_anonymize_is_disabled():
+    cfg = _config(AnonymizeConfig(enabled=False, additional_names=ADDITIONAL_NAMES))
+    with patch("digest.anonymizer.requests.get") as get:
+        anonymizer.setup(cfg, "Basic x")
+    get.assert_not_called()
+    assert anonymizer.outgoing("Michael Zürcher") == "Michael Zürcher"
+
+
+def test_a_bare_first_name_of_an_additional_name_is_not_replaced():
+    cfg = _config(AnonymizeConfig(enabled=True, additional_names=ADDITIONAL_NAMES, on_directory_failure="continue"))
+    with patch("digest.anonymizer.requests.get", return_value=_resp([], status=500)):
+        anonymizer.setup(cfg, "Basic x")
+    assert anonymizer.outgoing("Michael ist im Urlaub") == "Michael ist im Urlaub"
+
+
 def test_setup_disabled_leaves_gate_off():
     with patch("digest.anonymizer.requests.get") as get:
         assert anonymizer.setup(_config(AnonymizeConfig(enabled=False)), "Basic x") is None

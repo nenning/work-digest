@@ -830,3 +830,48 @@ def test_for_project_keeps_exclude_pages(tmp_path):
 def test_bad_exclude_and_anonymize_values_rejected(tmp_path, yaml, key):
     with pytest.raises(ValueError, match=key.replace(".", r"\.")):
         _load(tmp_path, yaml)
+
+
+def test_utf8_config_with_emoji_comment_loads(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    zwj_emoji = "👨" + "‍" + "👩"
+    text = VALID_YAML.replace("data_dir: ~/.digest", "data_dir: ~/.digest  # " + zwj_emoji + " Organisation Einführung")
+    cfg_file.write_bytes(text.encode("utf-8"))
+    assert load_config(cfg_file).email.subject_prefix == "[Work]"
+
+
+def test_utf8_config_keeps_non_ascii_values(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    text = VALID_YAML.replace("subject_prefix: " + chr(34) + "[Work]" + chr(34), "subject_prefix: " + chr(34) + "[Zürich]" + chr(34))
+    cfg_file.write_bytes(text.encode("utf-8"))
+    assert load_config(cfg_file).email.subject_prefix == "[Zürich]"
+
+
+def test_cp1252_config_still_loads(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    text = VALID_YAML.replace("data_dir: ~/.digest", "data_dir: ~/.digest  # Einführung")
+    cfg_file.write_bytes(text.encode("cp1252"))
+    assert load_config(cfg_file).email.subject_prefix == "[Work]"
+
+
+def test_additional_names_from_the_yaml_reach_the_anonymizer(tmp_path):
+    import requests
+    from unittest.mock import patch
+    from digest import anonymizer, problems
+    cfg_file = tmp_path / "config.yaml"
+    lines = ["anonymize:", "  enabled: true", "  on_directory_failure: continue", "  additional_names:",
+             "    - 'Michael Zürcher'", "    - 'Theodor Brüggemann'"]
+    text = VALID_YAML + chr(10).join(lines) + chr(10)
+    cfg_file.write_bytes(text.encode("utf-8"))
+    cfg = load_config(cfg_file)
+    assert cfg.anonymize.additional_names == ["Michael Zürcher", "Theodor Brüggemann"]
+    problems.clear()
+    try:
+        with patch("digest.anonymizer.requests.get", side_effect=requests.ConnectionError("down")):
+            anonymizer.setup(cfg, "Basic x")
+        out = anonymizer.outgoing("Theodor Brüggemann und Michael Zürcher")
+        assert "Theodor" not in out and "Zürcher" not in out
+        assert anonymizer.incoming(out) == "Theodor Brüggemann und Michael Zürcher"
+    finally:
+        anonymizer.configure(None)
+        problems.clear()
