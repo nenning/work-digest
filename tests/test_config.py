@@ -783,3 +783,37 @@ def test_page_watch_ticket_block_and_fallback(tmp_path):
 def test_page_watch_ticket_requires_project(tmp_path):
     with pytest.raises(ValueError, match="page_watch.ticket.project is required"):
         _load(tmp_path, PAGE_WATCH_YAML + "  ticket:\n    issue_type: Bug\n")
+
+
+def test_exclude_pages_and_anonymize_load(tmp_path):
+    cfg = _load(tmp_path, (
+        "exclude_pages:\n  page_ids:\n    - \"123\"\n    - 456\n  title_patterns:\n    - '\\bSandbox\\b'\n"
+        "anonymize:\n  enabled: true\n  additional_names: [\"Acme Corp\"]\n  on_directory_failure: continue\n"))
+    assert cfg.atlassian.exclude_pages.page_ids == {"123", "456"}
+    assert cfg.atlassian.exclude_pages.is_excluded("1", "my sandbox")
+    assert cfg.anonymize.enabled is True
+    assert cfg.anonymize.additional_names == ["Acme Corp"]
+    assert cfg.anonymize.on_directory_failure == "continue"
+
+
+def test_anonymize_defaults_off(tmp_path):
+    cfg = _load(tmp_path, "")
+    assert not cfg.atlassian.exclude_pages
+    assert cfg.anonymize.enabled is False
+    assert cfg.anonymize.additional_names == []
+    assert cfg.anonymize.on_directory_failure == "fail"
+
+
+def test_null_exclude_and_anonymize_blocks_tolerated(tmp_path):
+    cfg = _load(tmp_path, "exclude_pages:\nanonymize:\n")
+    assert not cfg.atlassian.exclude_pages and cfg.anonymize.enabled is False
+
+
+def test_on_directory_failure_must_be_fail_or_continue(tmp_path):
+    with pytest.raises(ValueError, match="anonymize.on_directory_failure"):
+        _load(tmp_path, "anonymize:\n  on_directory_failure: ignore\n")
+
+
+def test_for_project_keeps_exclude_pages(tmp_path):
+    cfg = _load(tmp_path, "exclude_pages:\n  page_ids: [7]\n")
+    assert cfg.atlassian.for_project(cfg.atlassian.projects[0]).exclude_pages.page_ids == {"7"}

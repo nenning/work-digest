@@ -91,6 +91,21 @@ language: de   # output language for LLM summaries: ISO 639-1 code (de | en | fr
 
 data_dir: ~/.digest
 
+# Confluence pages to leave out of every Confluence source (digest, mgmt summary, spec monitor, page watch).
+# An excluded page and its whole subtree are skipped. Optional.
+# exclude_pages:
+#   page_ids:                    # page ids; the tool writes the page title as a "# «Title»" comment behind each id on the next run
+#     - "123456"
+#   title_patterns:              # regex, case-insensitive, searched in the page title (and in every ancestor's title)
+#     - '\bSandbox\b'
+
+# Replace people's names, email addresses and phone numbers with placeholders before text is sent to the LLM,
+# and restore them in the LLM's answer. Optional, off by default.
+# anonymize:
+#   enabled: false
+#   additional_names: []         # people not in the Atlassian user directory (customers, externals)
+#   on_directory_failure: fail   # fail | continue -- what to do when the Atlassian user directory cannot be loaded
+
 # Management summary mode (--mgmt-summary flag). Optional — only needed for that mode.
 # Shared across every project with a mgmt_summary block above; --mgmt-summary produces
 # one email with one narrative section per such project (skipping projects with no

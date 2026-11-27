@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 import yaml
 
+from digest.page_exclude import PageExclusion, load_exclusion
+
 Provider = Literal["openai", "anthropic", "azure_openai"]
 VALID_PROVIDERS = {"openai", "anthropic", "azure_openai"}
 
@@ -51,6 +53,7 @@ class AtlassianConfig:
     # routes that scoped tokens require. Human-facing links (browse/webui) always use `url`.
     jira_api_base: Optional[str] = None
     confluence_api_base: Optional[str] = None
+    exclude_pages: PageExclusion = field(default_factory=PageExclusion)
 
     def __post_init__(self):
         if self.jira_api_base is None:
@@ -98,6 +101,13 @@ class M365Config:
     tenant_id: str = "organizations"
     client_id: Optional[str] = None   # custom Azure AD app client ID (required if tenant blocks Azure CLI)
     enabled: bool = True              # set False to skip Teams/Outlook and use local Outlook draft instead
+
+
+@dataclass
+class AnonymizeConfig:
+    enabled: bool = False
+    additional_names: List[str] = field(default_factory=list)   # people not in the Atlassian directory (customers, externals)
+    on_directory_failure: Literal["fail", "continue"] = "fail"
 
 
 @dataclass
@@ -255,6 +265,7 @@ class Config:
     spec_monitor: Optional[SpecMonitorConfig] = None
     gitlab: Optional[GitLabConfig] = None
     page_watch: Optional[PageWatchConfig] = None
+    anonymize: AnonymizeConfig = field(default_factory=AnonymizeConfig)
 
 
 def _watch_timeout(config: "Config") -> Optional[int]:
@@ -544,6 +555,25 @@ def _load_mgmt_summary(raw: Optional[dict]) -> MgmtSummaryConfig:
     )
 
 
+VALID_DIRECTORY_FAILURE = ("fail", "continue")
+
+
+def _load_anonymize(raw: Optional[dict]) -> AnonymizeConfig:
+    if not raw:
+        return AnonymizeConfig()
+    names = raw.get("additional_names") or []
+    if isinstance(names, str):
+        names = [names]
+    on_failure = raw.get("on_directory_failure", "fail")
+    if on_failure not in VALID_DIRECTORY_FAILURE:
+        raise ValueError(f"anonymize.on_directory_failure must be one of {list(VALID_DIRECTORY_FAILURE)}, got: {on_failure!r}")
+    return AnonymizeConfig(
+        enabled=bool(raw.get("enabled", False)),
+        additional_names=[str(n).strip() for n in names if str(n).strip()],
+        on_directory_failure=on_failure,
+    )
+
+
 def _load_project(raw: dict) -> ProjectConfig:
     name = raw.get("name")
     if not name:
@@ -614,6 +644,7 @@ def load_config(path: Path) -> Config:
             projects=[_load_project(p) for p in (a.get("projects") or [])],
             auth_type=auth_type,
             cloud_id=a.get("cloud_id"),
+            exclude_pages=load_exclusion(raw.get("exclude_pages")),
         ),
         m365=M365Config(
             tenant_id=m.get("tenant_id", "organizations"),
@@ -642,6 +673,7 @@ def load_config(path: Path) -> Config:
         spec_monitor=_load_spec_monitor(raw.get("spec_monitor")),
         gitlab=_load_gitlab(raw.get("gitlab")),
         page_watch=_load_page_watch(raw.get("page_watch")),
+        anonymize=_load_anonymize(raw.get("anonymize")),
     )
     _validate_page_watch_trace(config.page_watch, config.atlassian, config.gitlab)
     return config
