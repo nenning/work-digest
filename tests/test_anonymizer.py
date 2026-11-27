@@ -121,6 +121,26 @@ def test_merged_phone_candidates_fail_closed(text, kept):
     assert a.restore(anon) == f"see {text} now"
 
 
+@pytest.mark.parametrize("phone", [
+    "030 1234-56-78", "+49 30 1234-56-78", "+41 44 1234-56-78",
+    "+41 79 12.34.5678", "+33 1.23.45.6789",
+])
+def test_phone_with_date_shaped_group_masked(phone):
+    a = Anonymizer()
+    anon = a.anonymize(f"call {phone} now")
+    assert anon == "call PHONE_001 now"
+    assert a.restore(anon) == f"call {phone} now"
+
+
+@pytest.mark.parametrize("text", [
+    "PSSA-1234 and PSSA-5678", "timestamp 2026-11-27T12:30:45",
+    "range 2026-11-27 - 2026-12-31", "version 1.2.3.4567 and 2026-11-27 12:30",
+    "27.11.2026 10:50",
+])
+def test_dates_and_ids_untouched(text):
+    assert Anonymizer().anonymize(text) == text
+
+
 def test_two_phones_one_space_get_two_placeholders():
     a = Anonymizer()
     assert a.anonymize("079 123 45 67 044 987 65 43") == "PHONE_001 PHONE_002"

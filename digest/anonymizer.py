@@ -5,7 +5,10 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 _PHONE_RE = re.compile(r"(?<![\w+])(?:\+|00)?\d[\d ()./\-]{7,}\d(?!\w)")
-_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})(?!\d)")
+_DATE_RE = re.compile(
+    r"(?<!\d)((?:19|20)\d\d-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
+    r"|(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.(?:19|20)\d\d)(?!\d)"
+)
 _PHONE_TOKEN_RE = re.compile(r"\+?\d+")
 _PLACEHOLDER_RE = re.compile(r"(?i)(PERSON|EMAIL|PHONE)_(\d+)")
 _SEP = " "
@@ -32,21 +35,27 @@ def _phone_chunks(tokens: List[re.Match]) -> Optional[List[Tuple[int, int]]]:
     """Partition tokens into consecutive (start, end) runs of 9 to 15 digits; None if impossible."""
     n = len(tokens)
     digits = [len(t.group(0).lstrip("+")) for t in tokens]
-    best: List[Optional[Tuple[int, List[Tuple[int, int]]]]] = [None] * (n + 1)
-    best[0] = (0, [])
+    cost: List[Optional[int]] = [0] + [None] * n
+    prev = [0] * (n + 1)
     for i in range(n):
-        if best[i] is None:
+        if cost[i] is None:
             continue
         # A chunk not starting with 0 or + is less likely to be a real phone start, so it costs more.
-        cost = best[i][0] + (1 if tokens[i].group(0)[0] in "0+" else 2)
+        c = cost[i] + (1 if tokens[i].group(0)[0] in "0+" else 2)
         total = 0
         for j in range(i, n):
             total += digits[j]
             if total > 15:
                 break
-            if total >= 9 and (best[j + 1] is None or cost < best[j + 1][0]):
-                best[j + 1] = (cost, best[i][1] + [(i, j)])
-    return None if best[n] is None else best[n][1]
+            if total >= 9 and (cost[j + 1] is None or c < cost[j + 1]):
+                cost[j + 1], prev[j + 1] = c, i
+    if cost[n] is None:
+        return None
+    chunks, end = [], n
+    while end:
+        chunks.append((prev[end], end - 1))
+        end = prev[end]
+    return chunks[::-1]
 
 
 def _phone_key(raw: str) -> str:
@@ -129,10 +138,12 @@ class Anonymizer:
 
     def _phone(self, m: re.Match) -> str:
         raw = m.group(0)
-        pieces = _DATE_RE.split(raw)
-        if len(pieces) > 1:
-            return "".join(p if i % 2 else _PHONE_RE.sub(self._phone, p) for i, p in enumerate(pieces))
         digits = re.sub(r"\D", "", raw)
+        date = _DATE_RE.search(raw)
+        # A short candidate only loses a date at its start ("2026-11-27 10:50"); elsewhere it is likely part of the phone.
+        if date and (len(digits) > 15 or date.start() == 0):
+            pieces = _DATE_RE.split(raw)
+            return "".join(p if i % 2 else _PHONE_RE.sub(self._phone, p) for i, p in enumerate(pieces))
         if len(digits) < 9:
             return raw
         if len(digits) <= 15:
