@@ -1,7 +1,15 @@
 """Replace names, emails and phone numbers with placeholders before text goes to an LLM, and restore them after."""
 import re
 import threading
-from typing import Dict, Iterable, List, Optional, Tuple
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+
+import requests
+
+from digest import problems
+from digest.config import AtlassianConfig, Config
+from digest.models import SourceItem
 
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 _PHONE_RE = re.compile(r"(?<![\w+])(?:\+|00)?\d[\d ()./\-]{7,}\d(?!\w)")
@@ -187,3 +195,152 @@ class Anonymizer:
             if self._lookup(m) is None and m.group(0) not in out:
                 out.append(m.group(0))
         return out
+
+
+class DirectoryError(RuntimeError):
+    """The Atlassian user directory could not be loaded."""
+
+
+_DIRECTORY_PAGE_SIZE = 1000
+_DIRECTORY_MAX_PAGES = 50
+_REDUCED_PREFIX = "ANONYMIZATION REDUCED:"
+
+
+def _directory_sites(atlassian: AtlassianConfig) -> List[AtlassianConfig]:
+    sites, seen = [atlassian], {atlassian.jira_api_base.rstrip("/")}
+    for project in atlassian.projects:
+        if not project.url:
+            continue
+        site = atlassian.for_project(project)
+        base = site.jira_api_base.rstrip("/")
+        if base not in seen:
+            seen.add(base)
+            sites.append(site)
+    return sites
+
+
+def _site_users(site: AtlassianConfig, auth_header: str) -> List[str]:
+    base = site.jira_api_base.rstrip("/")
+    names: List[str] = []
+    start = 0
+    for _ in range(_DIRECTORY_MAX_PAGES):
+        try:
+            resp = requests.get(
+                f"{base}/rest/api/3/users/search",
+                headers={"Authorization": auth_header, "Accept": "application/json"},
+                params={"startAt": start, "maxResults": _DIRECTORY_PAGE_SIZE},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            page = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            raise DirectoryError(f"user directory request to {base} failed: {type(e).__name__}: {e}") from e
+        if not isinstance(page, list):
+            raise DirectoryError(f"user directory at {base} returned an unexpected response")
+        if not page:
+            return names
+        start += len(page)
+        names += [u["displayName"] for u in page
+                  if isinstance(u, dict) and u.get("accountType") == "atlassian" and u.get("displayName")]
+    raise DirectoryError(f"user directory at {base} exceeded {_DIRECTORY_MAX_PAGES} pages")
+
+
+def load_directory(atlassian: AtlassianConfig, auth_header: str) -> List[str]:
+    """Display names of all human Atlassian users on the global site and every per-project url override."""
+    names: List[str] = []
+    for site in _directory_sites(atlassian):
+        names += _site_users(site, auth_header)
+    names = list(dict.fromkeys(names))
+    if not names:
+        raise DirectoryError("user directory contains no human users")
+    return names
+
+
+_gate: Optional[Anonymizer] = None
+_notice: Optional[str] = None
+_reported: set = set()
+_gate_lock = threading.Lock()
+_skip: ContextVar[bool] = ContextVar("anonymizer_skip", default=False)
+
+
+def configure(a: Optional[Anonymizer]) -> None:
+    global _gate, _notice
+    with _gate_lock:
+        _gate = a
+        _reported.clear()
+        if a is None:
+            _notice = None
+
+
+def setup(config: Config, auth_header: str) -> Optional[Anonymizer]:
+    global _notice
+    cfg = config.anonymize
+    if not cfg.enabled:
+        configure(None)
+        return None
+    a = Anonymizer()
+    a.add_names(cfg.additional_names, allow_single_token=True)
+    notice = None
+    try:
+        a.add_names(load_directory(config.atlassian, auth_header))
+    except DirectoryError as e:
+        if cfg.on_directory_failure != "continue":
+            raise
+        notice = (f"{_REDUCED_PREFIX} user directory unavailable ({e}); only names seen in fetched items "
+                  "and anonymize.additional_names are replaced, emails and phone numbers still are.")
+    configure(a)
+    with _gate_lock:
+        _notice = notice
+    return a
+
+
+def _active() -> Optional[Anonymizer]:
+    return None if _skip.get() else _gate
+
+
+@contextmanager
+def skipped(flag: bool = True) -> Iterator[None]:
+    token = _skip.set(flag)
+    try:
+        yield
+    finally:
+        _skip.reset(token)
+
+
+def outgoing(text: str) -> str:
+    a = _active()
+    return text if a is None else a.anonymize(text)
+
+
+def incoming(text: Optional[str]) -> Optional[str]:
+    a = _active()
+    if a is None or text is None:
+        return text
+    restored = a.restore(text)
+    with _gate_lock:
+        fresh = [p for p in a.leftover(restored) if p not in _reported]
+        _reported.update(fresh)
+    if fresh:
+        problems.report("anonymize", f"LLM output contains placeholders that were never issued: {', '.join(fresh)}", lossy=False)
+    return restored
+
+
+def note_items(items: Iterable[SourceItem]) -> None:
+    a = _gate
+    if a is None:
+        return
+    names: List[str] = []
+    for item in items:
+        names += item.author.split(", ")
+        meta = item.metadata
+        names += [n for n in meta.get("mention_authors") or [] if isinstance(n, str)]
+        for key in ("mention_author", "assignee"):
+            if isinstance(meta.get(key), str):
+                names.append(meta[key])
+    a.add_names(names)
+
+
+def take_notices() -> List[str]:
+    with _gate_lock:
+        notices = [_notice] if _notice else []
+    return notices + problems.take("anonymize")[0]
