@@ -26,3 +26,11 @@ the pre-window baseline already fetches each intermediate version's metadata
 to check its timestamp, so collecting the `by` field along the way is free
 (same idea as `mgmt_confluence.py`'s `_walk_version_history`, without the
 team-account-id filter).
+
+**Exclusion:** `exclude_pages` (`digest/page_exclude.py`, config: top-level `exclude_pages.page_ids` /
+`title_patterns`) drops page-update results whose own id or any ancestor's id matches, or whose own or any ancestor's
+title matches a case-insensitive regex (the search already `expand`s `ancestors`), so a subtree goes with its root.
+The same filter runs in `mgmt_confluence.py` and in `ConfluenceClient.search_descendants`. Mention items are not
+filtered. The dropped count is a non-lossy problem (`confluence` / `mgmt-confluence`), shown as an email notice.
+`config_annotate.annotate_config()` runs at startup and writes `# «Title»` behind every `*page_id:` value and every
+item of a block-style `page_ids:` list (flow style is not annotated).

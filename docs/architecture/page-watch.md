@@ -126,6 +126,14 @@ not configured), 2 some actions failed. The Atlassian token needs write access (
 `spec_monitor.llm_timeout` when that block exists, else `page_watch.llm_timeout`. Models come from the shared
 `llm` section (`summary_models` for page summaries, `heavy_models` for the synthesis).
 
+## Exclusion
+
+`exclude_pages` (see `confluence.md`) is applied in `ConfluenceClient.search_descendants`: excluded pages and their
+subtrees never become entries, and the run prints `N page(s) excluded by exclude_pages` (console only, not in the
+report). `page_watch.parent_page_id` in `exclude_pages.page_ids` raises `SpecMonitorFatal` (id check only). A parent
+excluded only by a title pattern is still checked with `include_parent`, but every descendant is dropped because the
+parent is among their ancestors; without `include_parent` the "no page to watch" error is reported.
+
 ## Known limits
 
 - Deleted or moved-away pages are not detected (no baseline to compare the page list against).

@@ -310,6 +310,14 @@ set (the user named the spec explicitly), so the delta is always computed fresh.
   source is reported as changed (versions differ) or unchanged, with a "not
   compared" warning, never as cosmetic.
 
+## Exclusion
+
+`exclude_pages` (see `confluence.md`) is applied in `ConfluenceClient.search_descendants`, so excluded pages and their
+subtrees are never spec candidates; the run prints `N page(s) excluded by exclude_pages` (console only). They are not
+the report's "excluded" pages (those are candidates that failed the selector). `spec_monitor.parent_page_id` in
+`exclude_pages.page_ids` makes `discover_specs()` raise `ValueError` (fatal, id check only); a parent excluded by title
+pattern or ancestor is searched, but all its descendants are dropped.
+
 ## Known limits
 
 - eCH and i14y content is not diffed, only the version.
