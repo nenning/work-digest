@@ -614,10 +614,19 @@ def _load_project(raw: dict) -> ProjectConfig:
     )
 
 
+def _read_text(path: Path) -> str:
+    """UTF-8 (the annotator writes page titles with emoji); cp1252 for files saved by older editors."""
+    data = path.read_bytes()
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1252", errors="replace")
+
+
 def load_config(path: Path) -> Config:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
-    raw = yaml.safe_load(path.read_text())
+    raw = yaml.safe_load(_read_text(path))
     if not isinstance(raw, dict):
         raise ValueError(f"Config file is empty or malformed: {path}")
 
