@@ -3,6 +3,8 @@ import string
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from digest.anonymizer import Anonymizer
 
 
@@ -89,12 +91,52 @@ def test_email_keyed_case_insensitive_restored_to_first_seen():
 
 
 def test_phone_formats_matched():
-    a = Anonymizer()
     for phone in ["+41 79 123 45 67", "079 123 45 67", "044/123 45 67",
                   "+41 (0)79 123 45 67", "0041791234567"]:
+        a = Anonymizer()
         anon = a.anonymize(f"call {phone} now")
-        assert anon.startswith("call PHONE_") and anon.endswith(" now"), phone
-        assert a.restore(anon) != anon
+        assert anon == "call PHONE_001 now", phone
+        assert a.restore(anon) == f"call {phone} now"
+
+
+def _digits(text):
+    return "".join(ch for ch in text if ch.isdigit())
+
+
+@pytest.mark.parametrize("text, kept", [
+    ("079 123 45 67 044 987 65 43", []),
+    ("079 123 45 67 - 044 987 65 43", []),
+    ("079 123 45 67/044 987 65 43", []),
+    ("27.11.2026 079 123 45 67", ["27.11.2026"]),
+    ("079 123 45 67 27.11.2026", ["27.11.2026"]),
+    ("079 123 45 67 2026-11-27", ["2026-11-27"]),
+    ("Ticket 123456 079 123 45 67", ["Ticket"]),
+])
+def test_merged_phone_candidates_fail_closed(text, kept):
+    a = Anonymizer()
+    anon = a.anonymize(f"see {text} now")
+    assert "1234567" not in _digits(anon) and "9876543" not in _digits(anon), anon
+    for part in kept:
+        assert part in anon
+    assert a.restore(anon) == f"see {text} now"
+
+
+def test_two_phones_one_space_get_two_placeholders():
+    a = Anonymizer()
+    assert a.anonymize("079 123 45 67 044 987 65 43") == "PHONE_001 PHONE_002"
+
+
+def test_dotted_capital_i_name_matched():
+    a = Anonymizer(["İlker Yılmaz"])
+    anon = a.anonymize("İlker Yılmaz said")
+    assert anon == "PERSON_001 said"
+    assert a.restore(anon) == "İlker Yılmaz said"
+
+
+def test_three_token_rotated_variants():
+    a = Anonymizer(["Anna Maria Meier"])
+    anon = a.anonymize("Meier, Anna Maria; Meier Anna Maria; Meier Maria Anna; Anna Maria Meier")
+    assert anon == "PERSON_001; PERSON_001; PERSON_001; PERSON_001"
 
 
 def test_phone_plus_and_00_same_placeholder():

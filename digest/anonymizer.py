@@ -5,8 +5,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 _PHONE_RE = re.compile(r"(?<![\w+])(?:\+|00)?\d[\d ()./\-]{7,}\d(?!\w)")
-_ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-_PHONE_SPLIT_RE = re.compile(r"(\s*/\s+|\s+/\s*|\s{2,})")
+_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})(?!\d)")
+_PHONE_TOKEN_RE = re.compile(r"\+?\d+")
 _PLACEHOLDER_RE = re.compile(r"(?i)(PERSON|EMAIL|PHONE)_(\d+)")
 _SEP = " "
 _END = ""
@@ -22,7 +22,31 @@ def _variants(name: str) -> List[str]:
     out = [name, " ".join(tokens), " ".join(reversed(tokens))]
     if len(tokens) == 2:
         out.append(f"{tokens[1]}, {tokens[0]}")
+    elif len(tokens) >= 3:
+        rest = " ".join(tokens[:-1])
+        out += [f"{tokens[-1]} {rest}", f"{tokens[-1]}, {rest}"]
     return out
+
+
+def _phone_chunks(tokens: List[re.Match]) -> Optional[List[Tuple[int, int]]]:
+    """Partition tokens into consecutive (start, end) runs of 9 to 15 digits; None if impossible."""
+    n = len(tokens)
+    digits = [len(t.group(0).lstrip("+")) for t in tokens]
+    best: List[Optional[Tuple[int, List[Tuple[int, int]]]]] = [None] * (n + 1)
+    best[0] = (0, [])
+    for i in range(n):
+        if best[i] is None:
+            continue
+        # A chunk not starting with 0 or + is less likely to be a real phone start, so it costs more.
+        cost = best[i][0] + (1 if tokens[i].group(0)[0] in "0+" else 2)
+        total = 0
+        for j in range(i, n):
+            total += digits[j]
+            if total > 15:
+                break
+            if total >= 9 and (best[j + 1] is None or cost < best[j + 1][0]):
+                best[j + 1] = (cost, best[i][1] + [(i, j)])
+    return None if best[n] is None else best[n][1]
 
 
 def _phone_key(raw: str) -> str:
@@ -72,8 +96,10 @@ class Anonymizer:
                         continue
                     self._person_by_key.setdefault(key, name)
                     node = self._trie
-                    for ch in variant.lower():
-                        node = node.setdefault(ch, {})
+                    for ch in variant:
+                        low = ch.lower()
+                        # "İ".lower() is two characters; keep such letters as-is and let IGNORECASE handle them.
+                        node = node.setdefault(low if len(low) == 1 else ch, {})
                     if _END not in node:
                         node[_END] = {}
                         self._pattern = None
@@ -103,19 +129,27 @@ class Anonymizer:
 
     def _phone(self, m: re.Match) -> str:
         raw = m.group(0)
-        date = _ISO_DATE_RE.match(raw)
-        if date:
-            return raw[:date.end()] + _PHONE_RE.sub(self._phone, raw[date.end():])
-        digits = re.sub(r"\D", "", raw)
-        if len(digits) > 15:
-            # The greedy candidate can swallow several numbers ("079 ... / 0041..."); rescan the pieces so none leaks.
-            pieces = _PHONE_SPLIT_RE.split(raw)
-            if len(pieces) == 1:
-                return raw
+        pieces = _DATE_RE.split(raw)
+        if len(pieces) > 1:
             return "".join(p if i % 2 else _PHONE_RE.sub(self._phone, p) for i, p in enumerate(pieces))
+        digits = re.sub(r"\D", "", raw)
         if len(digits) < 9:
             return raw
-        return self._issue("PHONE", _phone_key(raw), raw)
+        if len(digits) <= 15:
+            return self._issue("PHONE", _phone_key(raw), raw)
+        # The greedy candidate swallows neighbouring numbers; split it into phones, and fail closed if that is impossible.
+        tokens = list(_PHONE_TOKEN_RE.finditer(raw))
+        if len(tokens) == 1:
+            return raw
+        chunks = _phone_chunks(tokens)
+        if chunks is None:
+            return self._issue("PHONE", _phone_key(raw), raw)
+        out, pos = [], 0
+        for i, j in chunks:
+            start, end = tokens[i].start(), tokens[j].end()
+            out += [raw[pos:start], self._issue("PHONE", _phone_key(raw[start:end]), raw[start:end])]
+            pos = end
+        return "".join(out) + raw[pos:]
 
     def anonymize(self, text: str) -> str:
         text = _EMAIL_RE.sub(lambda m: self._issue("EMAIL", m.group(0).lower(), m.group(0)), text)
